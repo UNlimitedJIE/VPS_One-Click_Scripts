@@ -9,8 +9,85 @@ apt_log_conservative_policy_once() {
   log info "APT policy: noninteractive conservative mode is enabled."
   log info "APT policy: keep existing local config files when package updates ship new defaults."
   log info "APT policy: using apt-get -y with dpkg --force-confdef --force-confold."
-  log info "APT policy: packages kept back by apt-get upgrade will be logged as warnings and will not fail the run."
+  log info "APT policy: packages kept back by apt-get upgrade will be logged as info by default, and only promoted to warnings when critical prerequisites remain unsatisfied."
   set_state "APT_POLICY_LOGGED" "true"
+}
+
+apt_critical_kept_back_package_names() {
+  printf '%s\n' \
+    ca-certificates \
+    curl \
+    sudo \
+    rsync \
+    git \
+    procps \
+    openssh-server \
+    nftables
+}
+
+apt_kept_back_package_is_critical() {
+  local package_name="${1:-}"
+  local critical_package=""
+
+  while IFS= read -r critical_package; do
+    [[ -n "${critical_package}" ]] || continue
+    [[ "${package_name}" == "${critical_package}" ]] && return 0
+  done < <(apt_critical_kept_back_package_names)
+
+  return 1
+}
+
+apt_critical_prerequisites_look_satisfied() {
+  local package_name=""
+
+  while IFS= read -r package_name; do
+    [[ -n "${package_name}" ]] || continue
+    package_installed "${package_name}" || return 1
+  done < <(printf '%s\n' ca-certificates curl sudo rsync git procps)
+
+  command_exists apt-get || return 1
+  command_exists dpkg || return 1
+  command_exists sudo || return 1
+  command_exists rsync || return 1
+  command_exists git || return 1
+  command_exists sshd || return 1
+
+  return 0
+}
+
+apt_kept_back_requires_warning() {
+  local package_name=""
+  local found_critical="false"
+
+  for package_name in "$@"; do
+    apt_kept_back_package_is_critical "${package_name}" || continue
+    found_critical="true"
+    break
+  done
+
+  if [[ "${found_critical}" != "true" ]]; then
+    return 1
+  fi
+
+  if apt_critical_prerequisites_look_satisfied; then
+    return 1
+  fi
+
+  return 0
+}
+
+apt_log_kept_back_packages() {
+  local phase_label="${1:-upgrade}"
+  shift || true
+  local -a kept_back_packages=("$@")
+
+  ((${#kept_back_packages[@]} > 0)) || return 0
+
+  if apt_kept_back_requires_warning "${kept_back_packages[@]}"; then
+    log warn "Conservative ${phase_label} kept back critical packages that may affect later steps: ${kept_back_packages[*]}"
+  else
+    log info "Conservative ${phase_label} kept these packages back for later review: ${kept_back_packages[*]}"
+  fi
 }
 
 apt_run_noninteractive() {
@@ -99,7 +176,7 @@ apt_conservative_upgrade() {
   else
     mapfile -t kept_back_packages < <(apt_list_kept_back_packages || true)
     if ((${#kept_back_packages[@]} > 0)); then
-      log warn "Conservative upgrade will keep these packages back: ${kept_back_packages[*]}"
+      apt_log_kept_back_packages "upgrade preview" "${kept_back_packages[@]}"
     else
       log info "No kept-back packages detected for conservative upgrade."
     fi
@@ -110,7 +187,7 @@ apt_conservative_upgrade() {
     upgrade
 
   if ((${#kept_back_packages[@]} > 0)); then
-    log warn "Conservative upgrade finished. These packages remain kept back: ${kept_back_packages[*]}"
+    apt_log_kept_back_packages "upgrade result" "${kept_back_packages[@]}"
   fi
 }
 
