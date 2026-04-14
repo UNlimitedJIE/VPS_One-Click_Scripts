@@ -19,6 +19,8 @@ source "${SCRIPT_DIR}/../lib/common.sh"
 # shellcheck source=../lib/ui.sh
 source "${SCRIPT_DIR}/../lib/ui.sh"
 
+_AUTHORIZED_KEYS_PASTED_SOURCE_FILE="${_AUTHORIZED_KEYS_PASTED_SOURCE_FILE:-}"
+
 fail_authorized_keys_install() {
   set_state "AUTHORIZED_KEYS_PRESENT" "no"
   set_state "AUTHORIZED_KEYS_COUNT" "0"
@@ -26,14 +28,18 @@ fail_authorized_keys_install() {
 }
 
 resolve_authorized_keys_source() {
-  local source_file=""
-  source_file="$(bootstrap_authorized_keys_fallback_path)"
-  if [[ -n "${AUTHORIZED_KEYS_FILE:-}" ]]; then
-    source_file="${AUTHORIZED_KEYS_FILE}"
+  local preferred_source=""
+  local configured_source=""
+
+  preferred_source="$(preferred_authorized_keys_source_path)"
+  if [[ -f "${preferred_source}" && "$(count_valid_ssh_keys_in_file "${preferred_source}")" -gt 0 ]]; then
+    printf '%s\n' "${preferred_source}"
+    return 0
   fi
 
-  if [[ -f "${source_file}" && "$(count_valid_ssh_keys_in_file "${source_file}")" -gt 0 ]]; then
-    printf '%s\n' "${source_file}"
+  configured_source="${AUTHORIZED_KEYS_FILE:-}"
+  if [[ -n "${configured_source}" && "${configured_source}" != "${preferred_source}" && -f "${configured_source}" && "$(count_valid_ssh_keys_in_file "${configured_source}")" -gt 0 ]]; then
+    printf '%s\n' "${configured_source}"
     return 0
   fi
 
@@ -44,16 +50,16 @@ authorized_keys_source_status_message() {
   local source_file="$1"
 
   if [[ ! -e "${source_file}" ]]; then
-    printf '当前公钥源文件不存在：%s\n' "${source_file}"
+    printf '固定公钥源文件不存在：%s\n' "${source_file}"
     return 0
   fi
 
   if [[ ! -s "${source_file}" ]]; then
-    printf '当前公钥源文件为空：%s\n' "${source_file}"
+    printf '固定公钥源文件为空：%s\n' "${source_file}"
     return 0
   fi
 
-  printf '当前公钥源文件里没有检测到有效公钥：%s\n' "${source_file}"
+  printf '固定公钥源文件里没有检测到有效公钥：%s\n' "${source_file}"
 }
 
 single_line_ssh_public_key_is_valid() {
@@ -78,8 +84,11 @@ capture_authorized_keys_source_via_paste() {
   local source_dir=""
   local prompt_body=""
   local pasted_key=""
+  local preferred_source=""
 
-  source_file="$(preferred_authorized_keys_source_path)"
+  _AUTHORIZED_KEYS_PASTED_SOURCE_FILE=""
+  preferred_source="$(preferred_authorized_keys_source_path)"
+  source_file="${preferred_source}"
   source_dir="$(dirname "${source_file}")"
 
   if is_true "${PLAN_ONLY:-false}" || is_true "${DRY_RUN:-false}"; then
@@ -90,16 +99,20 @@ capture_authorized_keys_source_via_paste() {
   ui_require_interactive || die "当前公钥源文件无效，且当前不是交互式终端，无法现场粘贴 SSH 公钥。请先写入 ${source_file}。"
 
   prompt_body="$(cat <<EOF
-$(authorized_keys_source_status_message "${AUTHORIZED_KEYS_FILE:-${source_file}}")
+$(authorized_keys_source_status_message "${preferred_source}")
+
+现在会优先使用固定路径：
+${preferred_source}
+
+如果你现在粘贴公钥，系统会先把公钥写入这个固定路径，再安装到 ${ADMIN_USER} 的 authorized_keys。
 
 是否现在粘贴 SSH 公钥？
-
 - yes：现在粘贴一整行公钥
-- no：暂不粘贴，跳过本次自动安装
+- no：暂不粘贴，保留当前阶段的临时状态
 EOF
 )"
 
-  if ! ui_confirm_text "SSH 公钥导入源缺失" "${prompt_body}"; then
+  if ! ui_confirm_text "第 4.4 段 SSH 公钥源未就绪" "${prompt_body}"; then
     return 1
   fi
 
@@ -107,7 +120,8 @@ EOF
     UI_LAST_INPUT=""
     export UI_LAST_INPUT
 
-    ui_print_raw "\n粘贴 SSH 公钥\n现在正在等待你粘贴一整行 SSH 公钥，粘贴后按回车。\n例如：ssh-ed25519 ... 或 ssh-rsa ...\n输入 0 取消。\n请输入："
+    ui_print_raw "\n第 4.4 段 粘贴 SSH 公钥\n现在正在等待你粘贴一整行 SSH 公钥，粘贴后按回车。\n写入固定路径：${source_file}\n例如：ssh-ed25519 ... 或 ssh-rsa ...\n输入 0 取消。\n请输入："
+    ui_flush_output || true
     if ! ui_read_line; then
       return 1
     fi
@@ -125,6 +139,7 @@ EOF
           ensure_directory "${source_dir}" "0755" "root" "root"
           apply_managed_file "${source_file}" "0644" "${pasted_key}" "false"
           AUTHORIZED_KEYS_FILE="${source_file}"
+          _AUTHORIZED_KEYS_PASTED_SOURCE_FILE="${source_file}"
           export_config
           log info "Authorized keys source file prepared: ${source_file}"
           printf '%s\n' "${source_file}"
@@ -167,6 +182,23 @@ validate_authorized_keys_target_install() {
   log info "Valid authorized_keys count for ${ADMIN_USER}: ${key_count}"
 }
 
+show_pasted_authorized_keys_result_and_wait() {
+  local source_file="$1"
+  local auth_file="$2"
+  local install_status="安装失败"
+  local key_count="0"
+
+  if admin_authorized_keys_install_valid_for_user "${ADMIN_USER}"; then
+    install_status="已安装成功"
+    key_count="$(admin_authorized_keys_count_for_user "${ADMIN_USER}")"
+  fi
+
+  ui_show_plain_and_wait \
+    "第 4.4 段 SSH 公钥处理结果" \
+    "已接收公钥。\n已写入源文件：${source_file}\n目标账户 authorized_keys：${auth_file}\n目标账户 authorized_keys 安装结果：${install_status}\n有效公钥数量：${key_count}" \
+    "按回车继续："
+}
+
 main() {
   load_config
   init_runtime
@@ -184,6 +216,7 @@ main() {
   local tmp_file=""
   local source_file=""
   local key_count="0"
+  local pasted_now="no"
 
   if id -u "${ADMIN_USER}" >/dev/null 2>&1; then
     home_dir="$(home_dir_for_user "${ADMIN_USER}")"
@@ -196,7 +229,7 @@ main() {
   ssh_dir="${home_dir}/.ssh"
   auth_file="${ssh_dir}/authorized_keys"
 
-  log info "Authorized keys target file: ${auth_file}"
+  log info "Stage 4.4 authorized_keys target file: ${auth_file}"
 
   source_file="$(resolve_authorized_keys_source || true)"
   if [[ -z "${source_file}" ]]; then
@@ -210,6 +243,9 @@ main() {
     fi
 
     source_file="$(capture_authorized_keys_source_via_paste || true)"
+    if [[ -n "${_AUTHORIZED_KEYS_PASTED_SOURCE_FILE}" ]]; then
+      pasted_now="yes"
+    fi
   fi
 
   if [[ -z "${source_file}" ]]; then
@@ -220,6 +256,12 @@ main() {
     return 0
   fi
 
+  AUTHORIZED_KEYS_FILE="${source_file}"
+  export_config
+
+  if [[ "${source_file}" != "$(preferred_authorized_keys_source_path)" ]]; then
+    log info "Preferred fixed source was not ready, so the configured authorized_keys source will be used: ${source_file}"
+  fi
   log info "Authorized keys source file: ${source_file}"
 
   ensure_directory "${ssh_dir}" "0700" "${ADMIN_USER}" "${ADMIN_USER}"
@@ -260,6 +302,10 @@ main() {
     fi
   else
     validate_authorized_keys_target_install "${ssh_dir}" "${auth_file}"
+  fi
+
+  if [[ "${pasted_now}" == "yes" ]] && is_false "${PLAN_ONLY}" && is_false "${DRY_RUN}"; then
+    show_pasted_authorized_keys_result_and_wait "${_AUTHORIZED_KEYS_PASTED_SOURCE_FILE}" "${auth_file}"
   fi
 }
 

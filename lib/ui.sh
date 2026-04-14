@@ -65,6 +65,25 @@ ui_print_raw() {
   return 1
 }
 
+ui_flush_output() {
+  if ui_open_tty; then
+    printf '' >"/dev/fd/${UI_TTY_FD}"
+    return 0
+  fi
+
+  if [[ -t 2 ]]; then
+    printf '' >&2
+    return 0
+  fi
+
+  if [[ -t 1 ]]; then
+    printf ''
+    return 0
+  fi
+
+  return 1
+}
+
 ui_read_line() {
   local answer=""
 
@@ -133,6 +152,7 @@ ui_confirm_text() {
 
   ui_print_raw "\n${title}\n${body}\n"
   ui_print_raw "继续执行请输入 yes："
+  ui_flush_output || true
   ui_read_line || return 1
   [[ "$(ui_trim_value "${UI_LAST_INPUT}")" == "yes" ]]
 }
@@ -157,6 +177,7 @@ ui_confirm_with_back() {
 
   ui_print_raw "\n${title}\n${body}\n"
   ui_print_raw "输入 yes 继续执行，输入 0 返回上一级菜单："
+  ui_flush_output || true
   ui_read_line || return 1
   [[ "$(ui_trim_value "${UI_LAST_INPUT}")" == "yes" ]]
 }
@@ -176,6 +197,7 @@ ui_prompt_input() {
     ui_print_raw "默认值：${default_value}\n"
   fi
   ui_print_raw "请输入："
+  ui_flush_output || true
   ui_read_line || return 1
 
   # Apply default when user presses Enter without input
@@ -193,8 +215,35 @@ ui_wait_for_enter() {
   ui_require_interactive || return 1
 
   ui_print_raw "${prompt}"
+  ui_flush_output || true
   ui_read_line || return 1
   return 0
+}
+
+ui_show_and_wait() {
+  local title="$1"
+  local body="$2"
+  local prompt="${3:-按回车继续：}"
+
+  if ui_use_whiptail; then
+    whiptail --title "${title}" --scrolltext --msgbox "${body}" 24 100
+    return $?
+  fi
+
+  ui_show_text_block "${title}" "${body}"
+  ui_wait_for_enter "${prompt}"
+}
+
+ui_show_plain_and_wait() {
+  local title="$1"
+  local body="$2"
+  local prompt="${3:-按回车继续：}"
+
+  ui_require_interactive || return 1
+
+  ui_print_raw "\n${title}\n${body}\n"
+  ui_flush_output || true
+  ui_wait_for_enter "${prompt}"
 }
 
 ui_choose_phase() {
@@ -266,6 +315,7 @@ ui_read_secret() {
 
   ui_print_raw "\n${title}\n${prompt}\n"
   ui_print_raw "请输入（输入不会显示）："
+  ui_flush_output || true
 
   local answer=""
   if ui_open_tty; then

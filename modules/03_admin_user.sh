@@ -2,20 +2,17 @@
 set -euo pipefail
 
 # Module: 03_admin_user
-# Purpose: 创建管理用户并加入 sudo，配置 sudo 模式。
+# Purpose: 创建管理用户，并分别配置 sudo 认证和本地账户密码策略。
 # Preconditions: root；Debian 12；ADMIN_USER 不得为 root。
 # Steps:
 #   1. 确认目标用户与组
 #   2. 不存在则创建用户
-#   3. 确保 shell、补充组、home 目录正确
-#   4. 交互选择 sudo 模式：
-#      - 直接回车 = 免密 sudo（写入 sudoers drop-in，可选是否锁定本地密码）
-#      - 输入密码 = sudo 需要该密码（设置本地密码，移除 NOPASSWD drop-in）
-#   5. 非交互 / plan / dry-run 使用 ADMIN_SUDO_MODE_DEFAULT
+#   3. 交互选择 sudo 行为
+#   4. 交互选择账户密码行为
+#   5. 分别应用账户密码与 sudo 配置，并做运行时验证
 # Idempotency:
 #   - 已存在用户只做必要修正
-#   - 已存在组不会重复创建
-#   - nopasswd -> password / password -> nopasswd 均可幂等切换
+#   - sudo 与账户密码可重复切换
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
@@ -23,13 +20,15 @@ source "${SCRIPT_DIR}/../lib/common.sh"
 # shellcheck source=../lib/ui.sh
 source "${SCRIPT_DIR}/../lib/ui.sh"
 
-_ADMIN_SUDO_PASSWORD="${_ADMIN_SUDO_PASSWORD:-}"
 _ADMIN_SUDO_MODE_SELECTED="${_ADMIN_SUDO_MODE_SELECTED:-}"
-_ADMIN_LOCK_LOCAL_PASSWORD="${_ADMIN_LOCK_LOCAL_PASSWORD:-false}"
+_ADMIN_SUDO_PASSWORD_SOURCE="${_ADMIN_SUDO_PASSWORD_SOURCE:-}"
+_ADMIN_ACCOUNT_PASSWORD_ACTION="${_ADMIN_ACCOUNT_PASSWORD_ACTION:-}"
+_ADMIN_ACCOUNT_PASSWORD_VALUE="${_ADMIN_ACCOUNT_PASSWORD_VALUE:-}"
 
 ensure_groups() {
   local groups_csv="$1"
   local group=""
+
   IFS=',' read -r -a group_list <<<"${groups_csv}"
   for group in "${group_list[@]}"; do
     [[ -n "${group}" ]] || continue
@@ -60,206 +59,259 @@ validate_admin_sudo_mode_default() {
 capture_admin_sudo_mode() {
   local default_mode="${ADMIN_SUDO_MODE_DEFAULT:-nopasswd}"
   local answer=""
-  local password=""
-  local password_confirm=""
 
-  _ADMIN_SUDO_PASSWORD=""
   _ADMIN_SUDO_MODE_SELECTED=""
-  _ADMIN_LOCK_LOCAL_PASSWORD="false"
+  _ADMIN_SUDO_PASSWORD_SOURCE="n/a"
 
   if is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
     _ADMIN_SUDO_MODE_SELECTED="${default_mode}"
+    if [[ "${_ADMIN_SUDO_MODE_SELECTED}" == "password" ]]; then
+      _ADMIN_SUDO_PASSWORD_SOURCE="shared-account-password"
+      log info "[plan] sudo password mode will still use the admin account password; independent sudo password is not supported."
+    fi
     log info "Selected sudo mode: ${_ADMIN_SUDO_MODE_SELECTED}"
     return 0
   fi
 
-  if ! ui_is_interactive; then
-    die "当前不是交互式终端，无法安全选择 sudo 模式"
-  fi
+  ui_require_interactive || die "当前不是交互式终端，无法安全选择 sudo 行为。"
 
   while true; do
     if ! ui_prompt_input \
-      "sudo 模式选择" \
-      "直接回车 = 免密 sudo\n输入 p = sudo 需要密码\n这里只影响 sudo，不会启用 SSH 密码登录"; then
+      "第 4.2 段 配置 sudo 行为" \
+      "请输入 sudo 模式：\n- nopasswd = sudo 不需要密码\n- password = sudo 需要密码\n\n说明：这里仅影响 sudo，不影响 SSH 公钥登录，也不会单独打开 SSH 密码登录。" \
+      "${default_mode}"; then
       die "无法读取 sudo 模式选择，请在交互式终端中执行。"
     fi
 
     answer="$(ui_trim_value "${UI_LAST_INPUT}")"
     case "${answer}" in
-      "")
-        _ADMIN_SUDO_MODE_SELECTED="nopasswd"
+      nopasswd|password)
+        _ADMIN_SUDO_MODE_SELECTED="${answer}"
         log info "Selected sudo mode: ${_ADMIN_SUDO_MODE_SELECTED}"
-        capture_nopasswd_local_password_policy
+        if [[ "${_ADMIN_SUDO_MODE_SELECTED}" == "password" ]]; then
+          capture_admin_sudo_password_source
+        fi
         return 0
         ;;
-      p|P)
-        while true; do
-          if ! ui_read_secret "设置 sudo 密码" "请输入 ${ADMIN_USER} 的 sudo 密码："; then
-            die "无法安全读取 sudo 密码输入，请在交互式终端中执行。"
-          fi
-          password="${UI_LAST_SECRET}"
-          UI_LAST_SECRET=""
-
-          if [[ -z "${password}" ]]; then
-            ui_warn_message "密码为空" "已选择 password 模式，密码不能为空，请重新输入。"
-            continue
-          fi
-
-          if ! ui_read_secret "确认 sudo 密码" "请再次输入 ${ADMIN_USER} 的 sudo 密码："; then
-            password=""
-            die "无法安全读取 sudo 密码确认输入，请在交互式终端中执行。"
-          fi
-          password_confirm="${UI_LAST_SECRET}"
-          UI_LAST_SECRET=""
-
-          if [[ "${password}" != "${password_confirm}" ]]; then
-            password=""
-            password_confirm=""
-            ui_warn_message "密码不一致" "两次输入的密码不一致，请重新输入。"
-            continue
-          fi
-
-          _ADMIN_SUDO_PASSWORD="${password}"
-          password=""
-          password_confirm=""
-          _ADMIN_SUDO_MODE_SELECTED="password"
-          log info "Selected sudo mode: ${_ADMIN_SUDO_MODE_SELECTED}"
-          return 0
-        done
-        ;;
       *)
-        ui_warn_message "输入无效" "直接回车选择免密 sudo；输入 p 选择 sudo 需要密码。"
+        ui_warn_message "输入无效" "请输入 nopasswd 或 password。"
         ;;
     esac
   done
 }
 
-capture_nopasswd_local_password_policy() {
+confirm_admin_sudo_separate_password_fallback() {
   local answer=""
 
+  while true; do
+    if ! ui_prompt_input \
+      "第 4.2 段 sudo 密码限制说明" \
+      "当前系统做不到真正独立的 sudo 密码。\n\n如果继续：\n- sudo 仍然只能使用 ${ADMIN_USER} 的账户密码\n- 下一步你可以 keep 当前账户密码，或 set 一个新的账户密码\n- 无论 keep 还是 set，sudo 都会使用这个账户密码\n\n输入 yes 接受这个限制并继续；输入 0 返回重新选择：" \
+      "yes"; then
+      die "无法读取 sudo 密码限制确认，请在交互式终端中执行。"
+    fi
+
+    answer="$(ui_trim_value "${UI_LAST_INPUT}")"
+    case "${answer}" in
+      yes|YES|y|Y)
+        return 0
+        ;;
+      0)
+        return 1
+        ;;
+      *)
+        ui_warn_message "输入无效" "请输入 yes 继续，或输入 0 返回重新选择 sudo 密码方案。"
+        ;;
+    esac
+  done
+}
+
+capture_admin_sudo_password_source() {
+  local answer=""
+  local default_value="shared"
+
+  while true; do
+    if ! ui_prompt_input \
+      "第 4.2 段 sudo 密码来源" \
+      "当前选择：sudo 需要密码。\n\n请输入：\n- shared = sudo 使用该用户的账户密码\n- separate = 我想单独设置 sudo 密码\n- 0 = 返回\n\n说明：SSH 登录认证是另一件事；这里不会把 sudo 密码自动当成 SSH 登录密码，也不会单独开启 SSH 密码登录。" \
+      "${default_value}"; then
+      die "无法读取 sudo 密码来源，请在交互式终端中执行。"
+    fi
+
+    answer="$(ui_trim_value "${UI_LAST_INPUT}")"
+    case "${answer}" in
+      0)
+        die "sudo 行为配置已取消。"
+        ;;
+      shared)
+        _ADMIN_SUDO_PASSWORD_SOURCE="shared-account-password"
+        log info "sudo password source request: use the admin account password"
+        return 0
+        ;;
+      separate)
+        if confirm_admin_sudo_separate_password_fallback; then
+          _ADMIN_SUDO_PASSWORD_SOURCE="separate-requested-fallback-to-account-password"
+          log info "sudo password source request: separate password requested, but implementation will still use the admin account password"
+          return 0
+        fi
+        ;;
+      *)
+        ui_warn_message "输入无效" "请输入 shared、separate 或 0。"
+        ;;
+    esac
+  done
+}
+
+capture_account_password_value() {
+  local password=""
+  local password_confirm=""
+
+  while true; do
+    if ! ui_read_secret "第 4.3 段 设置账户密码" "请输入 ${ADMIN_USER} 的本地账户密码："; then
+      die "无法安全读取账户密码输入，请在交互式终端中执行。"
+    fi
+    password="${UI_LAST_SECRET}"
+    UI_LAST_SECRET=""
+
+    if [[ -z "${password}" ]]; then
+      ui_warn_message "密码为空" "账户密码不能为空，请重新输入。"
+      continue
+    fi
+
+    if ! ui_read_secret "第 4.3 段 确认账户密码" "请再次输入 ${ADMIN_USER} 的本地账户密码："; then
+      password=""
+      die "无法安全读取账户密码确认输入，请在交互式终端中执行。"
+    fi
+    password_confirm="${UI_LAST_SECRET}"
+    UI_LAST_SECRET=""
+
+    if [[ "${password}" != "${password_confirm}" ]]; then
+      password=""
+      password_confirm=""
+      ui_warn_message "密码不一致" "两次输入的账户密码不一致，请重新输入。"
+      continue
+    fi
+
+    _ADMIN_ACCOUNT_PASSWORD_VALUE="${password}"
+    return 0
+  done
+}
+
+capture_admin_account_password_behavior() {
+  local current_state_label=""
+  local answer=""
+  local default_value="keep"
+  local password_is_available="no"
+
+  _ADMIN_ACCOUNT_PASSWORD_ACTION="keep"
+  _ADMIN_ACCOUNT_PASSWORD_VALUE=""
+
+  current_state_label="$(user_account_password_state_label "${ADMIN_USER}")"
+  if user_account_password_available "${ADMIN_USER}"; then
+    password_is_available="yes"
+  fi
+
+  if [[ "${_ADMIN_SUDO_MODE_SELECTED}" == "password" && "${password_is_available}" != "yes" ]]; then
+    default_value="set"
+  fi
+
+  if [[ "${_ADMIN_SUDO_PASSWORD_SOURCE}" == "separate-requested-fallback-to-account-password" ]]; then
+    default_value="set"
+  fi
+
   if is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
-    log info "[plan] nopasswd sudo will keep the local password unchanged by default."
-    _ADMIN_LOCK_LOCAL_PASSWORD="false"
+    if [[ "${_ADMIN_SUDO_MODE_SELECTED}" == "password" && "${password_is_available}" != "yes" ]]; then
+      _ADMIN_ACCOUNT_PASSWORD_ACTION="set"
+      log info "[plan] sudo password mode requires an available account password."
+    elif [[ "${_ADMIN_SUDO_PASSWORD_SOURCE}" == "separate-requested-fallback-to-account-password" ]]; then
+      _ADMIN_ACCOUNT_PASSWORD_ACTION="set"
+      log info "[plan] user requested a separate sudo password, but current implementation still requires using the account password."
+    else
+      _ADMIN_ACCOUNT_PASSWORD_ACTION="keep"
+    fi
+    log info "[plan] account password action: ${_ADMIN_ACCOUNT_PASSWORD_ACTION} (current state: ${current_state_label})"
     return 0
   fi
 
   while true; do
     if ! ui_prompt_input \
-      "本地密码处理" \
-      "已选择 nopasswd sudo。\n直接回车或输入 no = 不锁定本地密码\n输入 yes = 同时锁定本地密码\n这不会影响 SSH 公钥登录"; then
-      die "无法确认 nopasswd 模式下的本地密码策略，请在交互式终端中执行。"
+      "第 4.3 段 配置账户密码" \
+      "当前账户密码状态：${current_state_label}\n\n说明：\n- 账户密码影响本地/密码类认证\n- 账户密码不影响 SSH 公钥登录\n- sudo 是否需要密码是另一件事\n- 若上一步选择了 sudo=password，当前实现下 sudo 实际使用的也是该账户密码\n\n请输入：\n- keep = keep current\n- set = set password\n- lock = no local password / lock password\n- 0 = 返回" \
+      "${default_value}"; then
+      die "无法读取账户密码行为，请在交互式终端中执行。"
     fi
 
     answer="$(ui_trim_value "${UI_LAST_INPUT}")"
     case "${answer}" in
-      ""|no|NO|n|N)
-        _ADMIN_LOCK_LOCAL_PASSWORD="false"
-        log info "Local password policy for ${ADMIN_USER}: keep unchanged"
+      0)
+        die "账户密码配置已取消。"
+        ;;
+      keep)
+        if [[ "${_ADMIN_SUDO_MODE_SELECTED}" == "password" ]] && ! user_account_password_available "${ADMIN_USER}"; then
+          ui_warn_message "当前账户密码不可用" "sudo 需要密码时，该用户必须有可用的账户密码。请选择 set。"
+          continue
+        fi
+        _ADMIN_ACCOUNT_PASSWORD_ACTION="keep"
+        log info "Account password action: keep current state"
         return 0
         ;;
-      yes|YES|y|Y)
-        _ADMIN_LOCK_LOCAL_PASSWORD="true"
-        log info "Local password policy for ${ADMIN_USER}: lock after enabling nopasswd sudo"
+      set)
+        _ADMIN_ACCOUNT_PASSWORD_ACTION="set"
+        capture_account_password_value
+        log info "Account password action: set"
+        return 0
+        ;;
+      lock|locked|unset)
+        if [[ "${_ADMIN_SUDO_MODE_SELECTED}" == "password" ]]; then
+          ui_warn_message "当前组合无效" "sudo password 模式使用该账户密码，因此不能同时选择 no local password / lock password。"
+          continue
+        fi
+        _ADMIN_ACCOUNT_PASSWORD_ACTION="lock"
+        log info "Account password action: lock"
         return 0
         ;;
       *)
-        ui_warn_message "输入无效" "直接回车或输入 no 表示保留本地密码；输入 yes 表示锁定本地密码。"
+        ui_warn_message "输入无效" "请输入 keep、set、lock 或 0。"
         ;;
     esac
   done
 }
 
-require_admin_sudo_password() {
-  if [[ -z "${_ADMIN_SUDO_PASSWORD}" ]]; then
-    die "sudo 模式为 password，但当前没有可用的本地密码输入。"
-  fi
-}
-
-apply_nopasswd_sudo() {
-  local dropin_path=""
-  local content=""
-
-  dropin_path="$(sudoers_dropin_path)"
-  content="${ADMIN_USER} ALL=(ALL:ALL) NOPASSWD: ALL"
-
-  if is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
-    log info "[plan] write sudoers drop-in: ${dropin_path}"
-    log info "[plan] content: ${content}"
-    log info "[plan] set owner/group root:root and mode 0440 on ${dropin_path}"
-    log info "[plan] visudo -c -f ${dropin_path}"
-    if is_true "${_ADMIN_LOCK_LOCAL_PASSWORD}"; then
-      log info "[plan] passwd -l ${ADMIN_USER}"
-    else
-      log info "[plan] keep local password unchanged for ${ADMIN_USER}"
-    fi
-    log info "[plan] verify sudo -n true for ${ADMIN_USER}"
-    return 0
-  fi
-
-  command_exists visudo || die "visudo command not found."
-
-  apply_managed_file "${dropin_path}" "0440" "${content}"
-  chown root:root "${dropin_path}"
-  chmod 0440 "${dropin_path}"
-
-  if ! visudo -c -f "${dropin_path}" >/dev/null 2>&1; then
-    rm -f "${dropin_path}"
-    die "visudo 校验失败，已移除 ${dropin_path}。请检查用户名是否合法。"
-  fi
-  log info "visudo validation passed: ${dropin_path}"
-
-  if is_true "${_ADMIN_LOCK_LOCAL_PASSWORD}"; then
-    passwd -l "${ADMIN_USER}" >/dev/null
-    log info "Local password locked for ${ADMIN_USER}."
-  else
-    log info "Local password unchanged for ${ADMIN_USER}."
-  fi
-
-  verify_nopasswd_sudo_runtime
-}
-
-apply_sudo_mode() {
-  local mode="$1"
-
-  case "${mode}" in
-    nopasswd)
-      log info "Applying sudo mode: nopasswd (passwordless sudo)"
-      apply_nopasswd_sudo
+apply_account_password_behavior() {
+  case "${_ADMIN_ACCOUNT_PASSWORD_ACTION}" in
+    keep)
+      log info "Keeping current account password state for ${ADMIN_USER}: $(user_account_password_state_label "${ADMIN_USER}")"
       ;;
-    password)
-      log info "Applying sudo mode: password (sudo requires password)"
-      apply_password_sudo
+    set)
+      if is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
+        log info "[plan] set account password for ${ADMIN_USER} (hidden)"
+      else
+        [[ -n "${_ADMIN_ACCOUNT_PASSWORD_VALUE}" ]] || die "账户密码动作为 set，但当前没有可用的密码输入。"
+        printf '%s:%s\n' "${ADMIN_USER}" "${_ADMIN_ACCOUNT_PASSWORD_VALUE}" | chpasswd
+        _ADMIN_ACCOUNT_PASSWORD_VALUE=""
+        log info "Account password updated for ${ADMIN_USER}."
+      fi
+      ;;
+    lock)
+      if is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
+        log info "[plan] passwd -l ${ADMIN_USER}"
+      else
+        passwd -l "${ADMIN_USER}" >/dev/null
+        log info "Account password locked for ${ADMIN_USER}."
+      fi
       ;;
     *)
-      die "Unknown sudo mode: ${mode}. Must be nopasswd or password."
+      die "Unknown account password action: ${_ADMIN_ACCOUNT_PASSWORD_ACTION:-<empty>}"
       ;;
   esac
 
-  set_state "ADMIN_SUDO_MODE" "${mode}"
+  set_state "ADMIN_ACCOUNT_PASSWORD_ACTION" "${_ADMIN_ACCOUNT_PASSWORD_ACTION}"
+  set_state "ADMIN_ACCOUNT_PASSWORD_STATE" "$(user_account_password_state "${ADMIN_USER}")"
 }
 
-apply_password_sudo() {
-  local dropin_path=""
+verify_password_required_sudo_runtime() {
   local sudo_output=""
   local sudo_status=0
-  dropin_path="$(sudoers_dropin_path)"
-
-  if is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
-    log info "[plan] set local password for ${ADMIN_USER} (hidden)"
-    log info "[plan] remove sudoers drop-in if exists: ${dropin_path}"
-    return 0
-  fi
-
-  require_admin_sudo_password
-
-  printf '%s:%s\n' "${ADMIN_USER}" "${_ADMIN_SUDO_PASSWORD}" | chpasswd
-  _ADMIN_SUDO_PASSWORD=""
-  log info "Local password set for ${ADMIN_USER}."
-
-  if [[ -f "${dropin_path}" ]]; then
-    rm -f "${dropin_path}"
-    log info "Removed sudoers drop-in: ${dropin_path}"
-  fi
 
   sudo_output="$(
     env LC_ALL=C LANG=C sudo -u "${ADMIN_USER}" sudo -n true 2>&1
@@ -269,8 +321,9 @@ apply_password_sudo() {
     die "Expected password-required sudo for ${ADMIN_USER}, but sudo -n succeeded unexpectedly."
   fi
 
-  if [[ "${sudo_output}" == *"password is required"* ]]; then
+  if [[ "${sudo_output}" == *"password is required"* || "${sudo_output}" == *"a password is required"* ]]; then
     log info "Verified password-required sudo for ${ADMIN_USER}."
+    set_state "ADMIN_SUDO_RUNTIME_VERIFIED" "yes"
     return 0
   fi
 
@@ -287,16 +340,89 @@ verify_nopasswd_sudo_runtime() {
 
   if [[ "${sudo_status}" -eq 0 ]]; then
     log info "Verified nopasswd sudo for ${ADMIN_USER}."
+    set_state "ADMIN_SUDO_RUNTIME_VERIFIED" "yes"
     return 0
   fi
 
   die "Configured nopasswd sudo for ${ADMIN_USER}, but runtime verification failed: ${sudo_output:-<no output>}"
 }
 
+apply_nopasswd_sudo() {
+  local dropin_path=""
+  local content=""
+
+  dropin_path="$(sudoers_dropin_path)"
+  content="${ADMIN_USER} ALL=(ALL:ALL) NOPASSWD: ALL"
+
+  if is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
+    log info "[plan] write sudoers drop-in: ${dropin_path}"
+    log info "[plan] content: ${content}"
+    log info "[plan] visudo -c -f ${dropin_path}"
+    log info "[plan] verify sudo -n true for ${ADMIN_USER}"
+    return 0
+  fi
+
+  command_exists visudo || die "visudo command not found."
+
+  apply_managed_file "${dropin_path}" "0440" "${content}"
+  chown root:root "${dropin_path}"
+  chmod 0440 "${dropin_path}"
+
+  if ! visudo -c -f "${dropin_path}" >/dev/null 2>&1; then
+    rm -f "${dropin_path}"
+    die "visudo 校验失败，已移除 ${dropin_path}。请检查用户名是否合法。"
+  fi
+
+  log info "visudo validation passed: ${dropin_path}"
+  verify_nopasswd_sudo_runtime
+}
+
+apply_password_required_sudo() {
+  local dropin_path=""
+
+  dropin_path="$(sudoers_dropin_path)"
+  user_account_password_available "${ADMIN_USER}" || die "sudo password 模式需要该用户已有可用的账户密码。"
+
+  if is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
+    log info "[plan] remove sudoers drop-in if exists: ${dropin_path}"
+    log info "[plan] verify sudo -n true fails for ${ADMIN_USER}"
+    return 0
+  fi
+
+  if [[ -f "${dropin_path}" ]]; then
+    rm -f "${dropin_path}"
+    log info "Removed sudoers drop-in: ${dropin_path}"
+  fi
+
+  verify_password_required_sudo_runtime
+}
+
+apply_sudo_mode() {
+  case "${_ADMIN_SUDO_MODE_SELECTED}" in
+    nopasswd)
+      apply_nopasswd_sudo
+      set_state "ADMIN_SUDO_MODE" "nopasswd"
+      set_state "ADMIN_SUDO_PASSWORD_REQUEST" "n/a"
+      set_state "ADMIN_SUDO_PASSWORD_IMPLEMENTATION" "n/a"
+      set_state "ADMIN_SUDO_PASSWORD_SOURCE" "n/a"
+      ;;
+    password)
+      apply_password_required_sudo
+      set_state "ADMIN_SUDO_MODE" "password"
+      set_state "ADMIN_SUDO_PASSWORD_REQUEST" "${_ADMIN_SUDO_PASSWORD_SOURCE}"
+      set_state "ADMIN_SUDO_PASSWORD_IMPLEMENTATION" "account-password"
+      set_state "ADMIN_SUDO_PASSWORD_SOURCE" "account-password"
+      ;;
+    *)
+      die "Unknown sudo mode: ${_ADMIN_SUDO_MODE_SELECTED:-<empty>}"
+      ;;
+  esac
+}
+
 main() {
   load_config
   init_runtime
-  module_banner "03_admin_user" "创建管理用户并加入 sudo"
+  module_banner "03_admin_user" "创建管理用户并分别配置 sudo 与账户密码"
   require_root
   require_debian12
 
@@ -320,7 +446,6 @@ main() {
 
   local current_shell=""
   local home_dir=""
-  local sudo_mode=""
 
   if id -u "${ADMIN_USER}" >/dev/null 2>&1; then
     current_shell="$(getent passwd "${ADMIN_USER}" | cut -d: -f7)"
@@ -338,12 +463,13 @@ main() {
   fi
 
   run_cmd "Ensuring sudo groups for ${ADMIN_USER}" usermod -aG "${ADMIN_USER_GROUPS}" "${ADMIN_USER}"
-
   ensure_directory "${home_dir}" "0750" "${ADMIN_USER}" "${ADMIN_USER}"
 
   capture_admin_sudo_mode
-  sudo_mode="${_ADMIN_SUDO_MODE_SELECTED}"
-  apply_sudo_mode "${sudo_mode}"
+  capture_admin_account_password_behavior
+
+  apply_account_password_behavior
+  apply_sudo_mode
 
   set_state "ADMIN_USER_EXISTS" "yes"
   set_state "ADMIN_USER" "${ADMIN_USER}"

@@ -9,7 +9,11 @@ source "${SCRIPT_DIR}/../lib/ui.sh"
 
 cutover_warning_body() {
   local effective_port=""
+  local last_auth_method=""
+  local last_auth_label=""
   effective_port="$(effective_ssh_port_for_changes)"
+  last_auth_method="$(last_successful_ssh_auth_method_for_user "${ADMIN_USER}")"
+  last_auth_label="$(ssh_last_successful_auth_method_label "${last_auth_method}")"
 
   cat <<EOF
 此步骤将关闭 root 远程 SSH 登录。
@@ -18,8 +22,15 @@ cutover_warning_body() {
 - 管理用户：${ADMIN_USER:-<未设置>}
 - 后续登录方式：管理用户 + SSH 公钥
 - 当前 SSH 端口：${effective_port}
+- 当前 SSH 密码登录：$(ssh_policy_enabled_disabled_label "$(current_password_authentication_mode || true)")
+- 当前 SSH 公钥登录：$(ssh_publickey_login_ready_label_for_user "${ADMIN_USER}")
+- 最近一次成功 SSH 认证方式：${last_auth_label}
 - 如果管理用户连接尚未验证成功，不要继续
 - 如已修改 SSH 端口，还必须确认厂商安全组/云防火墙已同步放行该端口
+
+建议先做两次人工测试：
+- 公钥-only：$(ssh_force_publickey_test_command "${ADMIN_USER:-<ADMIN_USER>}" "${effective_port}")
+- 密码-only：$(ssh_force_password_test_command "${ADMIN_USER:-<ADMIN_USER>}" "${effective_port}")
 
 只有在你已经准备好用管理用户和 SSH 私钥登录时，才应继续执行。
 EOF
@@ -61,6 +72,9 @@ ensure_cutover_prerequisites() {
   local auth_key_count="0"
   local safe_gate_state=""
   local runtime_port=""
+  local password_policy=""
+  local pubkey_policy=""
+  local stage5_ready_state=""
 
   [[ -n "${ADMIN_USER:-}" ]] || die "管理用户名未设置，无法关闭 root 远程登录。"
   id -u "${ADMIN_USER}" >/dev/null 2>&1 || die "管理用户不存在：${ADMIN_USER}"
@@ -73,6 +87,8 @@ ensure_cutover_prerequisites() {
   validate_sshd_config
   safe_gate_state="$(get_state "SSH_SAFE_GATE_PASSED" || true)"
   [[ "${safe_gate_state}" == "yes" ]] || die "SSH_SAFE_GATE_PASSED 不是 yes，当前未满足最终收口条件。请先重新完成第 4 步并确认目标账户公钥已有效安装。"
+  stage5_ready_state="$(ssh_stage5_ready_state_for_user "${ADMIN_USER}")"
+  [[ "${stage5_ready_state}" == "yes" ]] || die "当前还不满足进入第 5 步的条件。请先确认 SSH 公钥已就绪且 passwordauthentication 已收紧为 no。"
 
   effective_port="$(effective_ssh_port_for_changes)"
   [[ "${effective_port}" =~ ^[0-9]+$ ]] || die "当前 SSH 端口无法识别，不能继续关闭 root 远程登录。"
@@ -80,6 +96,10 @@ ensure_cutover_prerequisites() {
   [[ "${runtime_port}" =~ ^[0-9]+$ ]] || die "当前 sshd 运行端口无法识别，不能继续关闭 root 远程登录。"
   [[ "${runtime_port}" == "${effective_port}" ]] || die "当前目标 SSH 端口是 ${effective_port}，但 sshd -T 报告的运行端口是 ${runtime_port}。请先修复 SSH 配置并重新验证。"
   ssh_port_is_listening_locally "${effective_port}" || die "当前目标 SSH 端口 ${effective_port} 未检测到本机监听，不能继续关闭 root 远程登录。"
+  password_policy="$(current_password_authentication_mode || true)"
+  pubkey_policy="$(current_pubkey_authentication_mode || true)"
+  [[ "${password_policy}" == "no" ]] || die "当前 SSH passwordauthentication 不是 no，不能继续最终收口。请先重新完成第 4 步并验证公钥登录。"
+  [[ "${pubkey_policy}" == "yes" ]] || die "当前 SSH pubkeyauthentication 不是 yes，不能继续最终收口。请先修复 SSH 配置。"
   log info "Next connection should use SSH port: ${effective_port}"
 }
 

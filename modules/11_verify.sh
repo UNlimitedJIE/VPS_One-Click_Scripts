@@ -73,12 +73,19 @@ verify_summary_swap_status() {
 print_verify_terminal_summary() {
   local admin_status="not configured"
   local auth_status="not ready"
-  local root_status="enabled"
+  local ssh_pubkey_readiness="not ready"
+  local root_status="unknown"
   local nftables_status="disabled"
   local time_sync_status="disabled"
   local auto_updates_status="disabled"
   local fail2ban_status="not installed"
   local swap_status=""
+  local account_password_status="unknown"
+  local ssh_password_policy="unknown"
+  local ssh_pubkey_policy="unknown"
+  local sudo_mode_summary="unknown"
+  local sudo_password_impl="unknown"
+  local last_auth_method="unable to determine from current logs"
   local summary=""
 
   if [[ -n "${ADMIN_USER:-}" ]] && id -u "${ADMIN_USER}" >/dev/null 2>&1; then
@@ -87,15 +94,14 @@ print_verify_terminal_summary() {
 
   if [[ -n "${ADMIN_USER:-}" ]] && admin_authorized_keys_ready_for_user "${ADMIN_USER}"; then
     auth_status="ready ($(admin_authorized_keys_count_for_user "${ADMIN_USER}") key(s))"
+    ssh_pubkey_readiness="ready"
   fi
 
-  if root_ssh_login_disabled; then
-    root_status="disabled"
-  elif [[ "$(get_state "ADMIN_LOGIN_CUTOVER" || true)" == "yes" ]]; then
-    root_status="still allowed after cutover"
-  else
-    root_status="still allowed (cutover pending)"
+  if [[ -n "${ADMIN_USER:-}" ]]; then
+    account_password_status="$(user_account_password_state_label "${ADMIN_USER}")"
   fi
+
+  root_status="$(ssh_policy_enabled_disabled_label "$(current_permit_root_login_mode || true)")"
 
   if service_enabled "nftables" && service_active "nftables"; then
     nftables_status="enabled and active"
@@ -121,6 +127,13 @@ print_verify_terminal_summary() {
   fi
 
   swap_status="$(verify_summary_swap_status)"
+  ssh_password_policy="$(ssh_policy_enabled_disabled_label "$(current_password_authentication_mode || true)")"
+  ssh_pubkey_policy="$(ssh_policy_enabled_disabled_label "$(current_pubkey_authentication_mode || true)")"
+  sudo_mode_summary="$(detect_admin_sudo_mode 2>/dev/null || printf 'unknown')"
+  sudo_password_impl="$(detect_admin_sudo_password_implementation 2>/dev/null || printf 'unknown')"
+  if [[ -n "${ADMIN_USER:-}" ]]; then
+    last_auth_method="$(ssh_last_successful_auth_method_label "$(last_successful_ssh_auth_method_for_user "${ADMIN_USER}")")"
+  fi
 
   summary="$(cat <<EOF
 === Verification Summary ===
@@ -128,15 +141,24 @@ Errors: ${failures}
 Warnings: ${warnings}
 Pending: ${pending}
 Admin user: ${admin_status}
+Account password: ${account_password_status}
+Sudo mode: ${sudo_mode_summary}
+Sudo password implementation: ${sudo_password_impl}
 Effective SSH port: $(effective_ssh_port_for_changes)
-Root remote login: ${root_status}
+SSH password auth current policy: ${ssh_password_policy:-unknown}
+SSH public key current policy: ${ssh_pubkey_policy:-unknown}
+SSH public key login readiness: ${ssh_pubkey_readiness}
+Root remote login current policy: ${root_status}
 authorized_keys: ${auth_status}
+Last observed successful SSH auth method: ${last_auth_method}
 nftables: ${nftables_status}
 time sync: ${time_sync_status}
 auto updates: ${auto_updates_status}
 fail2ban: ${fail2ban_status}
 swap: ${swap_status}
-Manual note: SSH 外部连通性仍需在新窗口手动验收。
+Manual note: password-only 测试若仍成功，说明 SSH 密码登录还没真正关掉。
+Publickey-only test: $(ssh_force_publickey_test_command "${ADMIN_USER:-<ADMIN_USER>}" "$(effective_ssh_port_for_changes)")
+Password-only test: $(ssh_force_password_test_command "${ADMIN_USER:-<ADMIN_USER>}" "$(effective_ssh_port_for_changes)")
 EOF
 )"
 
@@ -324,6 +346,11 @@ verify_admin_can_read_project_bootstrap() {
 
 detect_admin_sudo_mode() {
   local dropin_path=""
+  if [[ -z "${ADMIN_USER:-}" ]] || ! id -u "${ADMIN_USER}" >/dev/null 2>&1; then
+    printf '%s\n' "unknown"
+    return 0
+  fi
+
   dropin_path="/etc/sudoers.d/90-${ADMIN_USER}"
 
   if [[ -f "${dropin_path}" ]]; then
@@ -336,6 +363,25 @@ detect_admin_sudo_mode() {
   fi
 
   printf '%s\n' "password"
+}
+
+detect_admin_sudo_password_implementation() {
+  local sudo_mode=""
+  local implementation=""
+
+  sudo_mode="$(detect_admin_sudo_mode)"
+  case "${sudo_mode}" in
+    nopasswd)
+      printf '%s\n' "n/a"
+      ;;
+    password)
+      implementation="$(get_state "ADMIN_SUDO_PASSWORD_IMPLEMENTATION" || true)"
+      printf '%s\n' "${implementation:-account-password}"
+      ;;
+    *)
+      printf '%s\n' "unknown"
+      ;;
+  esac
 }
 
 verify_admin_sudo_behavior() {
@@ -393,16 +439,11 @@ verify_admin_sudo_behavior() {
   esac
 }
 
-sshd_effective_value() {
-  local key="$1"
-  local sshd_output="$2"
-  printf '%s\n' "${sshd_output}" | awk -v key="${key}" '$1 == key { print $2; exit }'
-}
-
 verify_sshd_effective_settings() {
   local sshd_output=""
   local password_auth=""
   local pubkey_auth=""
+  local kbd_auth=""
   local permit_root_login=""
   local port=""
   local runtime_port=""
@@ -421,6 +462,7 @@ verify_sshd_effective_settings() {
 
   password_auth="$(sshd_effective_value "passwordauthentication" "${sshd_output}")"
   pubkey_auth="$(sshd_effective_value "pubkeyauthentication" "${sshd_output}")"
+  kbd_auth="$(sshd_effective_value "kbdinteractiveauthentication" "${sshd_output}")"
   permit_root_login="$(sshd_effective_value "permitrootlogin" "${sshd_output}")"
   port="$(sshd_effective_value "port" "${sshd_output}")"
   runtime_port="$(current_ssh_port)"
@@ -429,33 +471,45 @@ verify_sshd_effective_settings() {
 
   if [[ -n "${password_auth}" ]]; then
     if [[ "${password_auth}" == "no" ]]; then
-      verify_ok "sshd -T passwordauthentication=${password_auth}"
+      verify_ok "SSH password auth current policy: disabled"
     elif is_false "${DISABLE_PASSWORD_LOGIN}" ; then
-      verify_ok "sshd -T passwordauthentication=${password_auth} (intentionally left enabled)"
+      verify_ok "SSH password auth current policy: enabled (intentionally left enabled)"
     elif is_true "${DISABLE_PASSWORD_LOGIN}" && [[ "${safe_gate_state}" != "yes" ]]; then
-      verify_pending "sshd -T passwordauthentication=${password_auth}; safe gate not passed yet, so password login still remains enabled during preparation"
+      verify_pending "SSH password auth current policy: enabled; safe gate not passed yet, so password login still remains enabled during preparation"
     else
-      verify_warn "sshd -T passwordauthentication=${password_auth}"
+      verify_warn "SSH password auth current policy: enabled"
     fi
   else
     verify_fail "Unable to read passwordauthentication from sshd -T"
   fi
 
   if [[ "${pubkey_auth}" == "yes" ]]; then
-    verify_ok "sshd -T pubkeyauthentication=${pubkey_auth}"
+    verify_ok "SSH public key current policy: enabled"
   elif [[ -n "${pubkey_auth}" ]]; then
-    verify_fail "sshd -T pubkeyauthentication=${pubkey_auth}"
+    verify_fail "SSH public key current policy: ${pubkey_auth}"
   else
     verify_fail "Unable to read pubkeyauthentication from sshd -T"
   fi
 
+  if [[ -n "${kbd_auth}" ]]; then
+    if [[ "${kbd_auth}" == "no" ]]; then
+      verify_ok "SSH keyboard-interactive current policy: disabled"
+    elif [[ "${safe_gate_state}" != "yes" ]]; then
+      verify_pending "SSH keyboard-interactive current policy: enabled; safe gate not passed yet, so keyboard-interactive auth still remains enabled during preparation"
+    else
+      verify_warn "SSH keyboard-interactive current policy: enabled"
+    fi
+  else
+    verify_pending "Unable to read kbdinteractiveauthentication from sshd -T"
+  fi
+
   if [[ -n "${permit_root_login}" ]]; then
     if [[ "${permit_root_login}" == "no" ]]; then
-      verify_ok "sshd -T permitrootlogin=${permit_root_login}"
+      verify_ok "Root remote login current policy: disabled"
     elif [[ "${cutover_state}" != "yes" ]]; then
-      verify_pending "sshd -T permitrootlogin=${permit_root_login}; final cutover has not been completed yet"
+      verify_pending "Root remote login current policy: enabled; final cutover has not been completed yet"
     else
-      verify_warn "sshd -T permitrootlogin=${permit_root_login}"
+      verify_warn "Root remote login current policy: enabled"
     fi
   else
     verify_fail "Unable to read permitrootlogin from sshd -T"
@@ -478,6 +532,67 @@ verify_sshd_effective_settings() {
   fi
 
   log info "[INFO] sshd -T only verifies effective local SSH settings; external SSH connectivity still needs a separate manual login test."
+}
+
+verify_admin_account_password_state() {
+  local password_state=""
+  local sudo_mode=""
+
+  if [[ -z "${ADMIN_USER:-}" ]]; then
+    verify_pending "ADMIN_USER is empty; skip account password state check"
+    return 0
+  fi
+
+  if ! id -u "${ADMIN_USER}" >/dev/null 2>&1; then
+    verify_pending "Admin user missing; skip account password state check: ${ADMIN_USER}"
+    return 0
+  fi
+
+  password_state="$(user_account_password_state "${ADMIN_USER}")"
+  sudo_mode="$(detect_admin_sudo_mode)"
+
+  case "${password_state}" in
+    set)
+      verify_ok "Admin local account password state: $(user_account_password_state_label "${ADMIN_USER}")"
+      ;;
+    locked_or_unset)
+      if [[ "${sudo_mode}" == "password" ]]; then
+        verify_fail "Admin local account password is locked or unset, but sudo mode is password"
+      else
+        verify_pending "Admin local account password state: $(user_account_password_state_label "${ADMIN_USER}")"
+      fi
+      ;;
+    *)
+      verify_pending "Admin local account password state: $(user_account_password_state_label "${ADMIN_USER}")"
+      ;;
+  esac
+}
+
+verify_last_observed_ssh_auth_method() {
+  local auth_method=""
+  local auth_label=""
+  local auth_line=""
+
+  if [[ -z "${ADMIN_USER:-}" ]]; then
+    verify_pending "ADMIN_USER is empty; skip SSH auth log inspection"
+    return 0
+  fi
+
+  auth_method="$(last_successful_ssh_auth_method_for_user "${ADMIN_USER}")"
+  auth_label="$(ssh_last_successful_auth_method_label "${auth_method}")"
+  auth_line="$(last_successful_ssh_auth_line_for_user "${ADMIN_USER}" || true)"
+
+  if [[ "${auth_method}" == "unknown" ]]; then
+    verify_pending "Last observed successful SSH auth method for ${ADMIN_USER}: ${auth_label}"
+  else
+    verify_ok "Last observed successful SSH auth method for ${ADMIN_USER}: ${auth_label}"
+  fi
+
+  if [[ -n "${auth_line}" ]]; then
+    log info "[INFO] Last successful SSH auth log line: ${auth_line}"
+  fi
+  log info "[INFO] Publickey-only test: $(ssh_force_publickey_test_command "${ADMIN_USER:-<ADMIN_USER>}" "$(effective_ssh_port_for_changes)")"
+  log info "[INFO] Password-only test: $(ssh_force_password_test_command "${ADMIN_USER:-<ADMIN_USER>}" "$(effective_ssh_port_for_changes)")"
 }
 
 verify_admin_authorized_keys_target() {
@@ -667,8 +782,10 @@ main() {
 
   verify_shortcut_wrapper
   verify_admin_can_read_project_bootstrap
+  verify_admin_account_password_state
   verify_admin_sudo_behavior
   verify_sshd_effective_settings
+  verify_last_observed_ssh_auth_method
   verify_admin_authorized_keys_target
 
   set_state "VERIFY_WARNINGS" "${warnings}"

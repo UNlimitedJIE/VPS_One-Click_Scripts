@@ -50,7 +50,7 @@ prompt_stage_admin_user_value() {
   local validation_error=""
 
   while true; do
-    if ! ui_prompt_input "管理用户名" "请输入要创建/使用的管理用户名（仅限字母、数字、下划线、短横线，且不能为 root）：\n${cancel_hint}"; then
+    if ! ui_prompt_input "第 4.1 段 管理用户名" "请输入要创建/使用的管理用户名（仅限字母、数字、下划线、短横线，且不能为 root）：\n${cancel_hint}"; then
       return 1
     fi
 
@@ -95,7 +95,7 @@ confirm_stage_admin_user_selection() {
   ui_require_interactive || die "第 4 步需要交互式确认管理用户名，请在交互式终端中执行。"
 
   if [[ -n "${validation_error}" ]]; then
-    ui_warn_message "管理用户名待确认" "当前 ADMIN_USER 为空或无效。\n当前配置来源：${config_source}\n\n现在必须重新输入管理用户名。"
+    ui_warn_message "第 4.1 段 管理用户名待确认" "当前 ADMIN_USER 为空或无效。\n当前配置来源：${config_source}\n\n现在必须重新输入管理用户名。"
     username="$(prompt_stage_admin_user_value "输入 0 返回：")" || return 1
     set_runtime_admin_user "${username}"
     log info "Stage 4 will use admin user: ${ADMIN_USER}"
@@ -103,7 +103,7 @@ confirm_stage_admin_user_selection() {
   fi
 
   while true; do
-    if ! ui_prompt_input "确认管理用户名" "当前默认用户名：${original_admin_user}\n当前配置来源：${config_source}\n\n直接回车：沿用当前默认用户名\n输入 0：返回\n输入任意合法用户名：直接改为新的 ADMIN_USER" "${original_admin_user}"; then
+    if ! ui_prompt_input "第 4.1 段 确认管理用户名" "当前默认用户名：${original_admin_user}\n当前配置来源：${config_source}\n\n直接回车：沿用当前默认用户名\n输入 0：返回\n输入任意合法用户名：直接替换 ADMIN_USER" "${original_admin_user}"; then
       return 1
     fi
 
@@ -130,19 +130,25 @@ confirm_stage_admin_user_selection() {
 
 stage_intro_body() {
   cat <<EOF
-这一步会按顺序完成以下动作：
-1. 创建管理用户
-   - 创建时会询问 sudo 模式：
-     直接回车 = 免密 sudo
-     输入密码 = sudo 需要该密码
-   - 会先出现一个可见的 sudo 模式选择提示；若选择 password，随后才会进入隐藏密码输入
-   - 若选择 nopasswd sudo，会再单独确认是否同时锁定本地密码；默认不锁定
-   - 这里设置的是本地 sudo 行为，不会自动启用 SSH 密码登录
-2. 配置 SSH 公钥
-3. 执行 SSH 接入准备
+第 4 步会按下面 4 段顺序执行：
+1. 第 4.1 段：确认或输入管理用户名
+2. 第 4.2 段：单独配置 sudo 行为
+   - nopasswd / password
+   - 若选择 password，会明确说明：当前 sudo 实际仍使用该用户的账户密码，不是假装有独立 sudo 密码
+3. 第 4.3 段：单独配置本地账户密码
+   - keep / set / no local password
+   - 账户密码影响本地/密码类认证，不影响 SSH 公钥登录
+4. 第 4.4 段：配置并验证 SSH 公钥
+   - 优先读取固定路径 $(preferred_authorized_keys_source_path)
+   - 若没有有效公钥，会进入现场粘贴模式
 
-这一阶段不会最终关闭 root 远程登录，而是为后续切换做准备。
-如果公钥没有成功安装到目标账户，后续仍不满足最终收口条件。
+4 段完成后，本阶段才会执行 SSH 接入准备：
+- 默认目标策略：PubkeyAuthentication=yes、PasswordAuthentication=no、KbdInteractiveAuthentication=no
+- 只有当目标账户 authorized_keys 已正确安装并通过 safe gate 后，才会真正关闭 SSH 密码登录
+- 如果公钥还没准备好，本阶段会临时保留 SSH 密码登录，避免把你锁死
+- root 远程登录在本阶段默认仍保持可用，第 5 步才做最终收口
+
+sudo、账户密码、SSH 登录认证是三件不同的事；这一步不会再把它们混在一起。
 EOF
 }
 
@@ -176,53 +182,57 @@ EOF
 
 stage_connection_summary() {
   local effective_port=""
-  local auth_ready="no"
+  local auth_ready="not ready"
   local safe_gate_state=""
   local admin_ready="no"
+  local password_policy=""
+  local root_policy=""
+  local target_password_policy=""
+  local target_pubkey_policy=""
+  local target_kbd_policy=""
+  local step5_ready="no"
+  local last_auth_method=""
+  local last_auth_label=""
   effective_port="$(effective_ssh_port_for_changes)"
   safe_gate_state="$(get_state "SSH_SAFE_GATE_PASSED" || true)"
+  password_policy="$(current_password_authentication_mode || true)"
+  root_policy="$(current_permit_root_login_mode || true)"
+  target_password_policy="$(get_state "SSH_AUTH_TARGET_PASSWORD" || true)"
+  target_pubkey_policy="$(get_state "SSH_AUTH_TARGET_PUBKEY" || true)"
+  target_kbd_policy="$(get_state "SSH_AUTH_TARGET_KBD" || true)"
+  last_auth_method="$(last_successful_ssh_auth_method_for_user "${ADMIN_USER}")"
+  last_auth_label="$(ssh_last_successful_auth_method_label "${last_auth_method}")"
 
   if [[ -n "${ADMIN_USER:-}" ]] && id -u "${ADMIN_USER}" >/dev/null 2>&1; then
     admin_ready="yes"
   fi
 
-  if [[ -n "${ADMIN_USER:-}" ]] && admin_authorized_keys_ready_for_user "${ADMIN_USER}"; then
-    auth_ready="yes"
-  fi
-
-  if [[ "${auth_ready}" == "yes" && "${safe_gate_state}" == "yes" ]]; then
-    cat <<EOF
-管理用户接入阶段已完成。
-
-请按下面方式准备下一次连接：
-- 用户名：${ADMIN_USER}
-- SSH 端口：${effective_port}
-- 登录方式：管理用户 + SSH 公钥
-- 建议保持当前 root 会话不断开，先在新窗口测试管理用户新连接
-- 连接示例：ssh -p ${effective_port} ${ADMIN_USER}@你的服务器IP
-- 第 5 步会进一步关闭 root 远程登录，必须在新连接验证成功后再执行
-
-如果你配置的目标端口不是 ${effective_port}，说明端口切换还在等待确认；
-请先确认云厂商安全组/云防火墙已经同步放行，再继续验证和收口。
-EOF
-    return 0
-  fi
+  auth_ready="$(ssh_publickey_login_ready_label_for_user "${ADMIN_USER}")"
+  step5_ready="$(ssh_stage5_ready_state_for_user "${ADMIN_USER}")"
+  safe_gate_state="${safe_gate_state:-no}"
 
   cat <<EOF
-管理用户接入阶段已完成，但当前还不能按“最终收口”继续推进。
-
-当前状态：
+管理用户接入阶段摘要
 - 用户名：${ADMIN_USER:-<未设置>}
 - 管理用户已创建：${admin_ready}
-- SSH 端口：${effective_port}
-- 目标账户公钥已安装：${auth_ready}
+- 当前有效 SSH 端口：${effective_port}
+- SSH 目标策略：pubkey=$(ssh_policy_enabled_disabled_label "${target_pubkey_policy:-yes}") / password=$(ssh_policy_enabled_disabled_label "${target_password_policy:-no}") / keyboard-interactive=$(ssh_policy_enabled_disabled_label "${target_kbd_policy:-no}")
+- 当前 SSH 密码登录：$(ssh_policy_enabled_disabled_label "${password_policy}")
+- 当前 SSH 公钥登录：${auth_ready}
+- 当前 root 远程登录：$(ssh_policy_enabled_disabled_label "${root_policy}")
+- 目标账户 authorized_keys：${auth_ready}
 - SSH safe gate：${safe_gate_state:-no}
-- 最终收口可执行：$( [[ "${auth_ready}" == "yes" && "${safe_gate_state}" == "yes" ]] && printf 'yes' || printf 'no' )
+- 当前是否满足进入第 5 步的条件：${step5_ready}
+- Last successful SSH auth for ${ADMIN_USER:-<unset>}: ${last_auth_label}
+
+测试说明：
+- 强制只走公钥：$(ssh_force_publickey_test_command "${ADMIN_USER:-<ADMIN_USER>}" "${effective_port}")
+- 强制只走密码：$(ssh_force_password_test_command "${ADMIN_USER:-<ADMIN_USER>}" "${effective_port}")
+- 若 SSH 密码登录已真正关闭，password-only 测试应失败；若仍成功，说明当前还在走密码认证。
 
 结论：
-- admin user created / target authorized_keys not installed yet / final cutover not yet eligible
-- 请先修复目标账户 ${ADMIN_USER:-<未设置>} 的 authorized_keys，再重新执行第 4 步验证
-- 在确认新连接可用前，不要继续执行关闭 root 远程登录的收口步骤
+- 只有当 authorized_keys 已正确安装且 safe gate=yes 时，SSH 密码登录才会默认收紧为 no
+- root 远程登录的最终关闭仍留在第 5 步
 EOF
 }
 

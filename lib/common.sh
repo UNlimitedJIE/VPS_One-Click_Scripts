@@ -437,12 +437,181 @@ admin_authorized_keys_count_for_user() {
   count_valid_ssh_keys_in_file "${auth_file}"
 }
 
+admin_authorized_keys_install_valid_for_user() {
+  local user="${1:-${ADMIN_USER:-}}"
+  local ssh_dir=""
+  local auth_file=""
+  local ssh_meta=""
+  local auth_meta=""
+  local key_count="0"
+
+  [[ -n "${user}" ]] || return 1
+  id -u "${user}" >/dev/null 2>&1 || return 1
+
+  ssh_dir="$(admin_ssh_dir_for_user "${user}" || true)"
+  auth_file="$(admin_authorized_keys_file_for_user "${user}" || true)"
+  [[ -n "${ssh_dir}" && -n "${auth_file}" ]] || return 1
+  [[ -d "${ssh_dir}" && -f "${auth_file}" ]] || return 1
+
+  ssh_meta="$(stat -c '%U:%G %a' "${ssh_dir}" 2>/dev/null || true)"
+  [[ "${ssh_meta}" == "${user}:${user} 700" ]] || return 1
+
+  auth_meta="$(stat -c '%U:%G %a' "${auth_file}" 2>/dev/null || true)"
+  [[ "${auth_meta}" == "${user}:${user} 600" ]] || return 1
+
+  key_count="$(count_valid_ssh_keys_in_file "${auth_file}")"
+  [[ "${key_count}" -gt 0 ]]
+}
+
 admin_authorized_keys_ready_for_user() {
   local user="${1:-${ADMIN_USER:-}}"
 
   [[ -n "${user}" ]] || return 1
   id -u "${user}" >/dev/null 2>&1 || return 1
-  [[ "$(admin_authorized_keys_count_for_user "${user}")" -gt 0 ]]
+  admin_authorized_keys_install_valid_for_user "${user}"
+}
+
+user_account_password_state() {
+  local user="${1:-${ADMIN_USER:-}}"
+  local shadow_entry=""
+  local password_field=""
+
+  [[ -n "${user}" ]] || {
+    printf '%s\n' "missing"
+    return 0
+  }
+
+  if ! id -u "${user}" >/dev/null 2>&1; then
+    printf '%s\n' "missing"
+    return 0
+  fi
+
+  if [[ "${EUID:-$(id -u)}" -ne 0 && ! -r /etc/shadow ]]; then
+    printf '%s\n' "unknown"
+    return 0
+  fi
+
+  shadow_entry="$(getent shadow "${user}" 2>/dev/null || true)"
+  if [[ -z "${shadow_entry}" ]]; then
+    printf '%s\n' "unknown"
+    return 0
+  fi
+
+  password_field="$(printf '%s\n' "${shadow_entry}" | cut -d: -f2)"
+  if [[ -z "${password_field}" || "${password_field}" == "!"* || "${password_field}" == "*"* ]]; then
+    printf '%s\n' "locked_or_unset"
+    return 0
+  fi
+
+  printf '%s\n' "set"
+}
+
+user_account_password_state_label() {
+  case "$(user_account_password_state "${1:-${ADMIN_USER:-}}")" in
+    set)
+      printf '%s\n' "已设置"
+      ;;
+    locked_or_unset)
+      printf '%s\n' "未设置或已锁定"
+      ;;
+    missing)
+      printf '%s\n' "账户不存在"
+      ;;
+    *)
+      printf '%s\n' "未知"
+      ;;
+  esac
+}
+
+user_account_password_available() {
+  [[ "$(user_account_password_state "${1:-${ADMIN_USER:-}}")" == "set" ]]
+}
+
+ssh_policy_enabled_disabled_label() {
+  case "${1:-unknown}" in
+    yes|enabled|true)
+      printf '%s\n' "enabled"
+      ;;
+    no|disabled|false)
+      printf '%s\n' "disabled"
+      ;;
+    *)
+      printf '%s\n' "unknown"
+      ;;
+  esac
+}
+
+ssh_readiness_label() {
+  case "${1:-unknown}" in
+    yes|ready|true)
+      printf '%s\n' "ready"
+      ;;
+    no|not-ready|false|"")
+      printf '%s\n' "not ready"
+      ;;
+    *)
+      printf '%s\n' "unknown"
+      ;;
+  esac
+}
+
+ssh_publickey_login_ready_for_user() {
+  local user="${1:-${ADMIN_USER:-}}"
+  [[ -n "${user}" ]] || return 1
+  admin_authorized_keys_ready_for_user "${user}"
+}
+
+ssh_publickey_login_ready_label_for_user() {
+  local user="${1:-${ADMIN_USER:-}}"
+
+  if ssh_publickey_login_ready_for_user "${user}"; then
+    printf '%s\n' "ready"
+    return 0
+  fi
+
+  printf '%s\n' "not ready"
+}
+
+ssh_safe_gate_state_for_user() {
+  local user="${1:-${ADMIN_USER:-}}"
+
+  if ssh_publickey_login_ready_for_user "${user}"; then
+    printf '%s\n' "yes"
+  else
+    printf '%s\n' "no"
+  fi
+}
+
+ssh_stage5_ready_state_for_user() {
+  local user="${1:-${ADMIN_USER:-}}"
+  local safe_gate_state=""
+  local current_password_auth=""
+  local current_pubkey_auth=""
+
+  safe_gate_state="$(get_state "SSH_SAFE_GATE_PASSED" || true)"
+  if [[ -z "${safe_gate_state}" ]]; then
+    safe_gate_state="$(ssh_safe_gate_state_for_user "${user}")"
+  fi
+
+  current_password_auth="$(current_password_authentication_mode || true)"
+  current_pubkey_auth="$(current_pubkey_authentication_mode || true)"
+
+  if ssh_publickey_login_ready_for_user "${user}" && [[ "${safe_gate_state}" == "yes" ]] && [[ "${current_password_auth}" == "no" ]] && [[ "${current_pubkey_auth}" == "yes" ]]; then
+    printf '%s\n' "yes"
+  else
+    printf '%s\n' "no"
+  fi
+}
+
+ssh_last_successful_auth_method_label() {
+  case "${1:-unknown}" in
+    publickey|password|keyboard-interactive/pam)
+      printf '%s\n' "${1}"
+      ;;
+    *)
+      printf '%s\n' "unable to determine from current logs"
+      ;;
+  esac
 }
 
 ssh_port_is_listening_locally() {
@@ -1200,14 +1369,112 @@ effective_ssh_port_for_changes() {
 
 current_permit_root_login_mode() {
   local mode=""
-  if command_exists sshd; then
-    mode="$(sshd -T 2>/dev/null | awk '/^permitrootlogin / {print $2; exit}' || true)"
-  fi
+  mode="$(sshd_effective_value "permitrootlogin" "$(sshd_effective_config || true)")"
   printf '%s\n' "${mode:-unknown}"
 }
 
 root_ssh_login_disabled() {
   [[ "$(current_permit_root_login_mode)" == "no" ]]
+}
+
+sshd_effective_config() {
+  command_exists sshd || return 1
+  sshd -T 2>/dev/null
+}
+
+sshd_effective_value() {
+  local key="${1:-}"
+  local sshd_output="${2:-}"
+
+  if [[ -z "${sshd_output}" ]]; then
+    sshd_output="$(sshd_effective_config || true)"
+  fi
+
+  printf '%s\n' "${sshd_output}" | awk -v key="${key}" '$1 == key { print $2; exit }'
+}
+
+current_password_authentication_mode() {
+  sshd_effective_value "passwordauthentication" "$(sshd_effective_config || true)"
+}
+
+current_pubkey_authentication_mode() {
+  sshd_effective_value "pubkeyauthentication" "$(sshd_effective_config || true)"
+}
+
+current_kbdinteractive_authentication_mode() {
+  sshd_effective_value "kbdinteractiveauthentication" "$(sshd_effective_config || true)"
+}
+
+ssh_last_successful_auth_line_from_auth_log() {
+  local user="${1:-${ADMIN_USER:-}}"
+  [[ -n "${user}" && -r /var/log/auth.log ]] || return 1
+
+  grep -E 'Accepted (publickey|password|keyboard-interactive/pam)' /var/log/auth.log 2>/dev/null \
+    | grep -F " for ${user} " \
+    | tail -n 1
+}
+
+ssh_last_successful_auth_line_from_journal() {
+  local user="${1:-${ADMIN_USER:-}}"
+  [[ -n "${user}" ]] || return 1
+  command_exists journalctl || return 1
+
+  journalctl --no-pager -n 4000 -o cat -u ssh -u ssh.service -u sshd -u sshd.service 2>/dev/null \
+    | grep -E 'Accepted (publickey|password|keyboard-interactive/pam)' \
+    | grep -F " for ${user} " \
+    | tail -n 1
+}
+
+last_successful_ssh_auth_line_for_user() {
+  local user="${1:-${ADMIN_USER:-}}"
+  local line=""
+
+  line="$(ssh_last_successful_auth_line_from_journal "${user}" || true)"
+  if [[ -n "${line}" ]]; then
+    printf '%s\n' "${line}"
+    return 0
+  fi
+
+  line="$(ssh_last_successful_auth_line_from_auth_log "${user}" || true)"
+  if [[ -n "${line}" ]]; then
+    printf '%s\n' "${line}"
+    return 0
+  fi
+
+  return 1
+}
+
+last_successful_ssh_auth_method_for_user() {
+  local user="${1:-${ADMIN_USER:-}}"
+  local line=""
+
+  line="$(last_successful_ssh_auth_line_for_user "${user}" || true)"
+  case "${line}" in
+    *"Accepted publickey for "*)
+      printf '%s\n' "publickey"
+      ;;
+    *"Accepted password for "*)
+      printf '%s\n' "password"
+      ;;
+    *"Accepted keyboard-interactive/pam for "*)
+      printf '%s\n' "keyboard-interactive/pam"
+      ;;
+    *)
+      printf '%s\n' "unknown"
+      ;;
+  esac
+}
+
+ssh_force_publickey_test_command() {
+  local user="${1:-${ADMIN_USER:-<ADMIN_USER>}}"
+  local port="${2:-$(effective_ssh_port_for_changes)}"
+  printf 'ssh -p %s -o PreferredAuthentications=publickey -o PubkeyAuthentication=yes -o PasswordAuthentication=no -i ~/.ssh/id_ed25519 %s@server\n' "${port}" "${user}"
+}
+
+ssh_force_password_test_command() {
+  local user="${1:-${ADMIN_USER:-<ADMIN_USER>}}"
+  local port="${2:-$(effective_ssh_port_for_changes)}"
+  printf 'ssh -p %s -o PreferredAuthentications=password -o PubkeyAuthentication=no -o PasswordAuthentication=yes %s@server\n' "${port}" "${user}"
 }
 
 warn_ssh_port_change_not_confirmed() {
