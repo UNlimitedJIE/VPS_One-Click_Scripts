@@ -8,9 +8,8 @@ step_no	module_id	phase	title_zh	short_desc_zh	risk_level	default_enabled	depend
 7	07_time_sync	init	配置时区和自动时间同步	设置系统时区，并启用 systemd-timesyncd 进行自动校时。	low	true	02_update_base	modules/07_time_sync.sh	该步骤会统一系统时间基础设置，减少日志时间漂移、证书校验异常和计划任务错时的问题。
 8	08_auto_updates	init	启用自动安全更新	安装并配置 unattended-upgrades，让系统自动安装安全更新。	medium	true	02_update_base	modules/08_auto_updates.sh	该步骤会启用 Debian 12 常见的自动安全更新机制，适合长期在线的 VPS，但你仍应保留定期人工审查。
 9	09_fail2ban	init	启用 Fail2Ban 防暴力破解	监控 SSH 登录失败记录，对多次尝试错误密码的来源进行临时封禁。	medium	true	03_admin_access_stage	modules/09_fail2ban.sh	该步骤会基于 SSH 日志做基础暴力破解防护，适合作为防火墙之外的第二层登录保护措施。
-10	10_swap	init	根据机器配置决定是否启用 swap	在小内存 VPS 上按策略创建并启用 swap，缓解内存不足问题。	medium	true	02_update_base	modules/10_swap.sh	该步骤会根据内存规模和配置决定是否创建 /swapfile。它不是性能优化万能药，但在小内存场景下可以降低因 OOM 导致服务直接被杀的风险。
-11	11_verify	init	执行初始化结果检查	检查 SSH、防火墙、时间同步、Fail2Ban、自动更新、swap 等关键状态是否已正确生效。	low	true	03_admin_access_stage,07_switch_admin_login,06_nftables,07_time_sync,08_auto_updates,09_fail2ban,10_swap	modules/11_verify.sh	该步骤不主动做高风险改动，主要用于把关键项目重新检查一遍，尽早发现初始化后仍未生效或仍有风险的地方。
-12	12_summary	init	输出初始化摘要和后续提醒	汇总当前系统状态，并提示下一步手动操作，例如验证 SSH、新建快照、记录配置。	low	true	11_verify	modules/12_summary.sh	该步骤会输出面向人阅读的初始化摘要，提醒你继续验证管理用户 SSH、新建快照、记录配置和后续按角色扩展服务端口。
+10	10_swap	init	显式选择并配置 swap	通过交互选择 skip / 1G / 2G / 4G / custom，并据此创建、保留或替换 /swapfile。	medium	true	02_update_base	modules/10_swap.sh	该步骤不再按内存自动决定，而是要求你显式选择 swap 方案，然后输出 /swapfile、swapon --show 和 /etc/fstab 的实际结果，避免“脚本替你猜”。
+11	11_verify	init	验收第 2-10 步的实际结果	直接检查系统真实状态、配置文件、服务状态和 SSH/登录日志，解释当前为什么会是这样。	low	true	03_admin_access_stage,07_switch_admin_login,06_nftables,07_time_sync,08_auto_updates,09_fail2ban,10_swap	modules/11_verify.sh	该步骤是初始化收口验收，不再只看 state。它会分项输出 Current / Expected / Evidence / Conclusion，并把原本第 12 步的摘要提醒一并合并进来。
 1	20_update_system	maintain	定期更新系统软件	刷新索引、安装系统更新，并清理不再需要的软件包。	medium	true	-	maintenance/20_update_system.sh	适合定期执行的保守型系统维护动作，用于减少系统落后版本积压，保持基础软件包处于较新状态。
 2	21_audit_users_ssh	maintain	审查用户、sudo 和 SSH 密钥	检查交互式用户、sudo 成员以及各用户 authorized_keys 情况。	medium	true	-	maintenance/21_audit_users_ssh.sh	该任务用于发现多余账号、遗留 sudo 权限和未审查的 SSH 公钥，适合在人员或运维方式发生变化后重点检查。
 3	22_audit_firewall	maintain	端口管理与防火墙检查	查看当前监听端口与 nftables 规则，并在菜单中进入开放/关闭端口操作。	medium	true	-	maintenance/22_audit_firewall.sh	该入口会先帮助你核对当前监听端口和 nftables 规则；在菜单交互里还可以继续做开放/关闭端口操作。这里修改的只是服务器内部防火墙，若云厂商还有安全组或云防火墙，也必须同步放行或关闭，否则公网访问结果可能与本机规则不一致。

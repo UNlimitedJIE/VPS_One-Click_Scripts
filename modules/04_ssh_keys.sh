@@ -2,16 +2,15 @@
 set -euo pipefail
 
 # Module: 04_ssh_keys
-# Purpose: 为管理用户写入 authorized_keys。
-# Preconditions: root；管理用户已存在；AUTHORIZED_KEYS_FILE 指向有效公钥文件。
+# Purpose: 为管理用户写入 authorized_keys，并强校验目标账户安装结果。
+# Preconditions: root；管理用户已存在。
 # Steps:
-#   1. 检查管理用户
-#   2. 校验公钥文件
-#   3. 创建 .ssh 目录并合并去重 authorized_keys
-#   4. 设置属主与权限
+#   1. 优先读取固定公钥源
+#   2. 必要时进入纯终端文本粘贴模式
+#   3. 先写入源文件，再安装到目标账户
+#   4. 强校验 .ssh / authorized_keys 属主、权限和 key 数
 # Idempotency:
-#   - 重复执行仅追加新公钥
-#   - 已存在相同公钥不会重复写入
+#   - 重复执行只会收敛为去重后的 authorized_keys
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
@@ -29,17 +28,10 @@ fail_authorized_keys_install() {
 
 resolve_authorized_keys_source() {
   local preferred_source=""
-  local configured_source=""
 
   preferred_source="$(preferred_authorized_keys_source_path)"
   if [[ -f "${preferred_source}" && "$(count_valid_ssh_keys_in_file "${preferred_source}")" -gt 0 ]]; then
     printf '%s\n' "${preferred_source}"
-    return 0
-  fi
-
-  configured_source="${AUTHORIZED_KEYS_FILE:-}"
-  if [[ -n "${configured_source}" && "${configured_source}" != "${preferred_source}" && -f "${configured_source}" && "$(count_valid_ssh_keys_in_file "${configured_source}")" -gt 0 ]]; then
-    printf '%s\n' "${configured_source}"
     return 0
   fi
 
@@ -79,16 +71,59 @@ single_line_ssh_public_key_is_valid() {
   [[ "${key_count}" -gt 0 ]]
 }
 
+prompt_plain_yes_no() {
+  local title="$1"
+  local body="$2"
+  local answer=""
+
+  while true; do
+    ui_print_raw "\n${title}\n${body}\n请输入 yes 或 no："
+    ui_flush_output || true
+    ui_read_line || return 1
+    answer="$(ui_trim_value "${UI_LAST_INPUT}")"
+    case "${answer}" in
+      yes|YES|y|Y)
+        return 0
+        ;;
+      no|NO|n|N|0|"")
+        return 1
+        ;;
+      *)
+        ui_warn_message "输入无效" "请输入 yes 或 no。"
+        ;;
+    esac
+  done
+}
+
+show_source_write_result_and_wait() {
+  local source_file="$1"
+  local key_count="$2"
+
+  ui_show_plain_and_wait \
+    "第 4.4 段 公钥源文件写入结果" \
+    "已接收公钥。\n已写入源文件：${source_file}\n源文件有效公钥数量：${key_count}" \
+    "按回车继续安装到目标账户："
+}
+
+show_target_install_result_and_wait() {
+  local auth_file="$1"
+  local key_count="$2"
+
+  ui_show_plain_and_wait \
+    "第 4.4 段 目标账户 authorized_keys 安装结果" \
+    "已安装到目标账户 authorized_keys。\n目标文件：${auth_file}\n有效公钥数量：${key_count}" \
+    "按回车继续："
+}
+
 capture_authorized_keys_source_via_paste() {
   local source_file=""
   local source_dir=""
-  local prompt_body=""
+  local auth_file="$1"
   local pasted_key=""
-  local preferred_source=""
+  local key_count="0"
 
   _AUTHORIZED_KEYS_PASTED_SOURCE_FILE=""
-  preferred_source="$(preferred_authorized_keys_source_path)"
-  source_file="${preferred_source}"
+  source_file="$(preferred_authorized_keys_source_path)"
   source_dir="$(dirname "${source_file}")"
 
   if is_true "${PLAN_ONLY:-false}" || is_true "${DRY_RUN:-false}"; then
@@ -98,21 +133,15 @@ capture_authorized_keys_source_via_paste() {
 
   ui_require_interactive || die "当前公钥源文件无效，且当前不是交互式终端，无法现场粘贴 SSH 公钥。请先写入 ${source_file}。"
 
-  prompt_body="$(cat <<EOF
-$(authorized_keys_source_status_message "${preferred_source}")
+  if ! prompt_plain_yes_no \
+    "第 4.4 段 SSH 公钥源未就绪" \
+    "$(authorized_keys_source_status_message "${source_file}")
 
-现在会优先使用固定路径：
-${preferred_source}
+当前目标用户：${ADMIN_USER}
+当前目标文件：${auth_file}
+当前源文件：${source_file}
 
-如果你现在粘贴公钥，系统会先把公钥写入这个固定路径，再安装到 ${ADMIN_USER} 的 authorized_keys。
-
-是否现在粘贴 SSH 公钥？
-- yes：现在粘贴一整行公钥
-- no：暂不粘贴，保留当前阶段的临时状态
-EOF
-)"
-
-  if ! ui_confirm_text "第 4.4 段 SSH 公钥源未就绪" "${prompt_body}"; then
+是否现在进入现场粘贴 SSH 公钥？"; then
     return 1
   fi
 
@@ -120,11 +149,9 @@ EOF
     UI_LAST_INPUT=""
     export UI_LAST_INPUT
 
-    ui_print_raw "\n第 4.4 段 粘贴 SSH 公钥\n现在正在等待你粘贴一整行 SSH 公钥，粘贴后按回车。\n写入固定路径：${source_file}\n例如：ssh-ed25519 ... 或 ssh-rsa ...\n输入 0 取消。\n请输入："
+    ui_print_raw "\n第 4.4 段 现场粘贴 SSH 公钥\n当前目标用户：${ADMIN_USER}\n当前目标文件：${auth_file}\n当前源文件：${source_file}\n现在正在等待你粘贴一整行 SSH 公钥，粘贴后按回车。\n输入 0 取消。\n请输入："
     ui_flush_output || true
-    if ! ui_read_line; then
-      return 1
-    fi
+    ui_read_line || return 1
 
     pasted_key="$(ui_trim_value "${UI_LAST_INPUT}")"
     case "${pasted_key}" in
@@ -135,17 +162,20 @@ EOF
         ui_warn_message "未收到公钥" "请粘贴一整行 SSH 公钥，或输入 0 取消。"
         ;;
       *)
-        if single_line_ssh_public_key_is_valid "${pasted_key}"; then
-          ensure_directory "${source_dir}" "0755" "root" "root"
-          apply_managed_file "${source_file}" "0644" "${pasted_key}" "false"
-          AUTHORIZED_KEYS_FILE="${source_file}"
-          _AUTHORIZED_KEYS_PASTED_SOURCE_FILE="${source_file}"
-          export_config
-          log info "Authorized keys source file prepared: ${source_file}"
-          printf '%s\n' "${source_file}"
-          return 0
+        if ! single_line_ssh_public_key_is_valid "${pasted_key}"; then
+          ui_warn_message "公钥无效" "只支持一整行 SSH 公钥，例如 ssh-ed25519 ... 或 ssh-rsa ...。"
+          continue
         fi
-        ui_warn_message "公钥无效" "只支持一整行 SSH 公钥，例如 ssh-ed25519 ... 或 ssh-rsa ...。你可以重试，或输入 0 取消。"
+
+        ensure_directory "${source_dir}" "0755" "root" "root"
+        apply_managed_file "${source_file}" "0644" "${pasted_key}" "false"
+        AUTHORIZED_KEYS_FILE="${source_file}"
+        _AUTHORIZED_KEYS_PASTED_SOURCE_FILE="${source_file}"
+        export_config
+        key_count="$(count_valid_ssh_keys_in_file "${source_file}")"
+        show_source_write_result_and_wait "${source_file}" "${key_count}"
+        printf '%s\n' "${source_file}"
+        return 0
         ;;
     esac
   done
@@ -182,21 +212,48 @@ validate_authorized_keys_target_install() {
   log info "Valid authorized_keys count for ${ADMIN_USER}: ${key_count}"
 }
 
-show_pasted_authorized_keys_result_and_wait() {
+install_authorized_keys_to_target() {
   local source_file="$1"
-  local auth_file="$2"
-  local install_status="安装失败"
+  local ssh_dir="$2"
+  local auth_file="$3"
+  local tmp_file=""
   local key_count="0"
 
-  if admin_authorized_keys_install_valid_for_user "${ADMIN_USER}"; then
-    install_status="已安装成功"
-    key_count="$(admin_authorized_keys_count_for_user "${ADMIN_USER}")"
+  ensure_directory "${ssh_dir}" "0700" "${ADMIN_USER}" "${ADMIN_USER}"
+  tmp_file="$(mktemp)"
+
+  if [[ -f "${auth_file}" ]]; then
+    awk 'NF && !seen[$0]++' "${auth_file}" "${source_file}" >"${tmp_file}"
+  else
+    awk 'NF && !seen[$0]++' "${source_file}" >"${tmp_file}"
   fi
 
-  ui_show_plain_and_wait \
-    "第 4.4 段 SSH 公钥处理结果" \
-    "已接收公钥。\n已写入源文件：${source_file}\n目标账户 authorized_keys：${auth_file}\n目标账户 authorized_keys 安装结果：${install_status}\n有效公钥数量：${key_count}" \
-    "按回车继续："
+  if [[ -f "${auth_file}" ]] && cmp -s "${tmp_file}" "${auth_file}"; then
+    log info "authorized_keys already up to date for ${ADMIN_USER}."
+  elif is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
+    log info "[plan] update ${auth_file} from ${source_file}"
+  else
+    install -m 0600 -o "${ADMIN_USER}" -g "${ADMIN_USER}" "${tmp_file}" "${auth_file}"
+    chown -R "${ADMIN_USER}:${ADMIN_USER}" "${ssh_dir}"
+    chmod 0700 "${ssh_dir}"
+    chmod 0600 "${auth_file}"
+    log info "authorized_keys installed for ${ADMIN_USER}: ${auth_file}"
+  fi
+
+  rm -f "${tmp_file}"
+
+  if is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
+    key_count="$(count_valid_ssh_keys_in_file "${source_file}")"
+    if [[ "${key_count}" -gt 0 ]]; then
+      set_state "AUTHORIZED_KEYS_PRESENT" "yes"
+      set_state "AUTHORIZED_KEYS_COUNT" "${key_count}"
+      log info "Plan/Dry-run preview valid key count: ${key_count}"
+      return 0
+    fi
+    fail_authorized_keys_install "No valid keys detected in ${source_file}."
+  fi
+
+  validate_authorized_keys_target_install "${ssh_dir}" "${auth_file}"
 }
 
 main() {
@@ -206,26 +263,22 @@ main() {
   require_root
   require_debian12
 
-  if [[ -z "${ADMIN_USER}" ]]; then
+  if [[ -z "${ADMIN_USER:-}" ]]; then
     die "ADMIN_USER is empty."
+  fi
+
+  if ! id -u "${ADMIN_USER}" >/dev/null 2>&1; then
+    die "Admin user must exist before configuring SSH keys."
   fi
 
   local home_dir=""
   local ssh_dir=""
   local auth_file=""
-  local tmp_file=""
   local source_file=""
   local key_count="0"
   local pasted_now="no"
 
-  if id -u "${ADMIN_USER}" >/dev/null 2>&1; then
-    home_dir="$(home_dir_for_user "${ADMIN_USER}")"
-  elif is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
-    log info "Plan/Dry-run note: ${ADMIN_USER} does not exist yet; assume /home/${ADMIN_USER} for preview."
-    home_dir="/home/${ADMIN_USER}"
-  else
-    die "Admin user must exist before configuring SSH keys."
-  fi
+  home_dir="$(home_dir_for_user "${ADMIN_USER}")"
   ssh_dir="${home_dir}/.ssh"
   auth_file="${ssh_dir}/authorized_keys"
 
@@ -233,24 +286,22 @@ main() {
 
   source_file="$(resolve_authorized_keys_source || true)"
   if [[ -z "${source_file}" ]]; then
-    if [[ "$(count_valid_ssh_keys_in_file "${auth_file}")" -gt 0 ]]; then
-      key_count="$(count_valid_ssh_keys_in_file "${auth_file}")"
-      set_state "AUTHORIZED_KEYS_PRESENT" "yes"
-      set_state "AUTHORIZED_KEYS_COUNT" "${key_count}"
-      log info "No authorized_keys source file is currently available, but target authorized_keys already exists for ${ADMIN_USER}."
-      log info "Valid authorized_keys count for ${ADMIN_USER}: ${key_count}"
-      return 0
-    fi
-
-    source_file="$(capture_authorized_keys_source_via_paste || true)"
+    source_file="$(capture_authorized_keys_source_via_paste "${auth_file}" || true)"
     if [[ -n "${_AUTHORIZED_KEYS_PASTED_SOURCE_FILE}" ]]; then
       pasted_now="yes"
     fi
   fi
 
   if [[ -z "${source_file}" ]]; then
-    log info "No valid authorized_keys source is currently available. SSH public key installation is skipped for now."
-    log info "Preferred source path: $(preferred_authorized_keys_source_path)"
+    if admin_authorized_keys_install_valid_for_user "${ADMIN_USER}"; then
+      key_count="$(admin_authorized_keys_count_for_user "${ADMIN_USER}")"
+      set_state "AUTHORIZED_KEYS_PRESENT" "yes"
+      set_state "AUTHORIZED_KEYS_COUNT" "${key_count}"
+      log info "No valid source file is currently available, but target authorized_keys is already ready for ${ADMIN_USER}."
+      return 0
+    fi
+
+    log info "No valid authorized_keys source is currently available. Target authorized_keys is still not ready."
     set_state "AUTHORIZED_KEYS_PRESENT" "no"
     set_state "AUTHORIZED_KEYS_COUNT" "0"
     return 0
@@ -258,54 +309,13 @@ main() {
 
   AUTHORIZED_KEYS_FILE="${source_file}"
   export_config
-
-  if [[ "${source_file}" != "$(preferred_authorized_keys_source_path)" ]]; then
-    log info "Preferred fixed source was not ready, so the configured authorized_keys source will be used: ${source_file}"
-  fi
   log info "Authorized keys source file: ${source_file}"
 
-  ensure_directory "${ssh_dir}" "0700" "${ADMIN_USER}" "${ADMIN_USER}"
-  tmp_file="$(mktemp)"
-
-  if [[ -f "${auth_file}" ]]; then
-    cat "${auth_file}" "${source_file}" | awk 'NF && !seen[$0]++' >"${tmp_file}"
-  else
-    awk 'NF && !seen[$0]++' "${source_file}" >"${tmp_file}"
-  fi
-
-  if [[ -f "${auth_file}" ]] && cmp -s "${tmp_file}" "${auth_file}"; then
-    log info "authorized_keys already up to date."
-  elif is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
-    log info "[plan] update ${auth_file} from ${source_file}"
-  else
-    install -m 0600 -o "${ADMIN_USER}" -g "${ADMIN_USER}" "${tmp_file}" "${auth_file}"
-    log info "authorized_keys updated for ${ADMIN_USER}"
-  fi
-
-  rm -f "${tmp_file}"
-
-  if is_false "${PLAN_ONLY}" && is_false "${DRY_RUN}"; then
-    chown "${ADMIN_USER}:${ADMIN_USER}" "${auth_file}"
-    chmod 0600 "${auth_file}"
-  fi
-
-  if is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
-    key_count="$(count_valid_ssh_keys_in_file "${source_file}")"
-    if [[ "${key_count}" -gt 0 ]]; then
-      set_state "AUTHORIZED_KEYS_PRESENT" "yes"
-      set_state "AUTHORIZED_KEYS_COUNT" "${key_count}"
-      log info "Valid source key count for ${ADMIN_USER}: ${key_count}"
-    else
-      set_state "AUTHORIZED_KEYS_PRESENT" "no"
-      set_state "AUTHORIZED_KEYS_COUNT" "0"
-      fail_authorized_keys_install "No valid keys detected in ${source_file}."
-    fi
-  else
-    validate_authorized_keys_target_install "${ssh_dir}" "${auth_file}"
-  fi
+  install_authorized_keys_to_target "${source_file}" "${ssh_dir}" "${auth_file}"
 
   if [[ "${pasted_now}" == "yes" ]] && is_false "${PLAN_ONLY}" && is_false "${DRY_RUN}"; then
-    show_pasted_authorized_keys_result_and_wait "${_AUTHORIZED_KEYS_PASTED_SOURCE_FILE}" "${auth_file}"
+    key_count="$(admin_authorized_keys_count_for_user "${ADMIN_USER}")"
+    show_target_install_result_and_wait "${auth_file}" "${key_count}"
   fi
 }
 

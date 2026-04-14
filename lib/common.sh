@@ -66,6 +66,14 @@ private_change_log_file_path() {
   printf '%s/change-log.tsv\n' "$(private_state_dir_path)"
 }
 
+path_is_within_dir() {
+  local path="${1:-}"
+  local dir="${2:-}"
+
+  [[ -n "${path}" && -n "${dir}" ]] || return 1
+  [[ "${path}" == "${dir}" || "${path}" == "${dir}/"* ]]
+}
+
 runtime_storage_mode_for_current_user() {
   if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
     printf '%s\n' "shared"
@@ -95,13 +103,13 @@ normalize_runtime_storage_paths() {
   SHARED_LOG_DIR="${shared_log_dir}"
 
   if [[ "${mode}" == "private" ]]; then
-    if [[ -z "${STATE_DIR:-}" || "${STATE_DIR}" == "${shared_state_dir}" ]]; then
+    if [[ -z "${STATE_DIR:-}" || "${STATE_DIR}" == "${shared_state_dir}" || "$(path_is_within_dir "${STATE_DIR}" "${shared_state_dir}" && printf yes || printf no)" == "yes" ]]; then
       STATE_DIR="${private_state_dir}"
     fi
-    if [[ -z "${LOG_DIR:-}" || "${LOG_DIR}" == "${shared_log_dir}" ]]; then
+    if [[ -z "${LOG_DIR:-}" || "${LOG_DIR}" == "${shared_log_dir}" || "$(path_is_within_dir "${LOG_DIR}" "${shared_log_dir}" && printf yes || printf no)" == "yes" ]]; then
       LOG_DIR="${private_log_dir}"
     fi
-    if [[ -z "${CHANGE_LOG_FILE:-}" || "${CHANGE_LOG_FILE}" == "${shared_change_log}" ]]; then
+    if [[ -z "${CHANGE_LOG_FILE:-}" || "${CHANGE_LOG_FILE}" == "${shared_change_log}" || "$(path_is_within_dir "${CHANGE_LOG_FILE}" "${shared_state_dir}" && printf yes || printf no)" == "yes" ]]; then
       CHANGE_LOG_FILE="${private_change_log}"
     fi
   else
@@ -120,7 +128,11 @@ ensure_runtime_storage_ready() {
   mkdir -p "${target_state_dir}" "${target_state_dir}/reports" "${target_state_dir}/tmp" "${target_log_dir}" 2>/dev/null && return 0
 
   if [[ "${RUNTIME_STORAGE_MODE:-}" == "private" ]]; then
-    return 1
+    STATE_DIR="/tmp/vps-bootstrap/state"
+    LOG_DIR="/tmp/vps-bootstrap/logs"
+    CHANGE_LOG_FILE="/tmp/vps-bootstrap/state/change-log.tsv"
+    mkdir -p "${STATE_DIR}" "${STATE_DIR}/reports" "${STATE_DIR}/tmp" "${LOG_DIR}" 2>/dev/null || true
+    return 0
   fi
 
   if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
@@ -146,17 +158,13 @@ set_default_config() {
   DISABLE_ROOT_SSH_PASSWORD="${DISABLE_ROOT_SSH_PASSWORD:-true}"
   INSTALL_FAIL2BAN="${INSTALL_FAIL2BAN:-true}"
   INSTALL_UNATTENDED_UPGRADES="${INSTALL_UNATTENDED_UPGRADES:-true}"
-  ENABLE_SWAP="${ENABLE_SWAP:-auto}"
-  SWAP_SIZE="${SWAP_SIZE:-}"
   ENABLE_NODEQUALITY="${ENABLE_NODEQUALITY:-true}"
   NODEQUALITY_FORCE="${NODEQUALITY_FORCE:-false}"
   ENABLE_NFTABLES="${ENABLE_NFTABLES:-true}"
   ENABLE_TIME_SYNC="${ENABLE_TIME_SYNC:-true}"
-  ENABLE_SUMMARY="${ENABLE_SUMMARY:-true}"
   PLAN_ONLY="${PLAN_ONLY:-false}"
   DRY_RUN="${DRY_RUN:-false}"
   BASE_PACKAGES="${BASE_PACKAGES:-curl ca-certificates sudo openssh-server nftables rsync unzip git jq lsof procps htop vim-tiny less}"
-  SWAP_AUTO_THRESHOLD_MB="${SWAP_AUTO_THRESHOLD_MB:-4096}"
   JOURNAL_VACUUM_DAYS="${JOURNAL_VACUUM_DAYS:-14}"
   CLEANUP_APT_CACHE="${CLEANUP_APT_CACHE:-true}"
   SAFE_TUNING_PROFILE="${SAFE_TUNING_PROFILE:-none}"
@@ -265,9 +273,9 @@ export_config() {
   export TIMEZONE SSH_PORT CONFIRM_SSH_PORT_CHANGE
   export ADMIN_USER ADMIN_USER_SHELL ADMIN_USER_GROUPS ADMIN_SUDO_MODE_DEFAULT AUTHORIZED_KEYS_FILE
   export DISABLE_PASSWORD_LOGIN DISABLE_ROOT_SSH_PASSWORD
-  export INSTALL_FAIL2BAN INSTALL_UNATTENDED_UPGRADES ENABLE_SWAP SWAP_SIZE
-  export ENABLE_NODEQUALITY NODEQUALITY_FORCE ENABLE_NFTABLES ENABLE_TIME_SYNC ENABLE_SUMMARY
-  export PLAN_ONLY DRY_RUN BASE_PACKAGES SWAP_AUTO_THRESHOLD_MB JOURNAL_VACUUM_DAYS
+  export INSTALL_FAIL2BAN INSTALL_UNATTENDED_UPGRADES
+  export ENABLE_NODEQUALITY NODEQUALITY_FORCE ENABLE_NFTABLES ENABLE_TIME_SYNC
+  export PLAN_ONLY DRY_RUN BASE_PACKAGES JOURNAL_VACUUM_DAYS
   export CLEANUP_APT_CACHE SAFE_TUNING_PROFILE SNAPSHOT_REMINDER
 }
 
@@ -275,13 +283,25 @@ init_runtime() {
   ensure_runtime_storage_ready
 
   RUN_ID="${RUN_ID:-$(date '+%Y%m%d-%H%M%S')}"
-  LOG_FILE="${LOG_FILE:-${LOG_DIR}/${RUN_ID}-${RUN_MODE:-manual}.log}"
+  if [[ "${RUNTIME_STORAGE_MODE:-shared}" == "private" && ( -z "${LOG_FILE:-}" || "$(path_is_within_dir "${LOG_FILE:-}" "${SHARED_LOG_DIR:-}" && printf yes || printf no)" == "yes" ) ]]; then
+    LOG_FILE="${LOG_DIR}/${RUN_ID}-${RUN_MODE:-manual}.log"
+  else
+    LOG_FILE="${LOG_FILE:-${LOG_DIR}/${RUN_ID}-${RUN_MODE:-manual}.log}"
+  fi
 
   if is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
-    STATE_FILE="${STATE_FILE:-${STATE_DIR}/tmp/runtime-${RUN_ID}-${RUN_MODE:-manual}.state}"
+    if [[ "${RUNTIME_STORAGE_MODE:-shared}" == "private" && ( -z "${STATE_FILE:-}" || "$(path_is_within_dir "${STATE_FILE:-}" "${SHARED_STATE_DIR:-}" && printf yes || printf no)" == "yes" ) ]]; then
+      STATE_FILE="${STATE_DIR}/tmp/runtime-${RUN_ID}-${RUN_MODE:-manual}.state"
+    else
+      STATE_FILE="${STATE_FILE:-${STATE_DIR}/tmp/runtime-${RUN_ID}-${RUN_MODE:-manual}.state}"
+    fi
     STATE_FILE_IS_EPHEMERAL="${STATE_FILE_IS_EPHEMERAL:-true}"
   else
-    STATE_FILE="${STATE_FILE:-${STATE_DIR}/runtime.state}"
+    if [[ "${RUNTIME_STORAGE_MODE:-shared}" == "private" && ( -z "${STATE_FILE:-}" || "$(path_is_within_dir "${STATE_FILE:-}" "${SHARED_STATE_DIR:-}" && printf yes || printf no)" == "yes" ) ]]; then
+      STATE_FILE="${STATE_DIR}/runtime.state"
+    else
+      STATE_FILE="${STATE_FILE:-${STATE_DIR}/runtime.state}"
+    fi
     STATE_FILE_IS_EPHEMERAL="${STATE_FILE_IS_EPHEMERAL:-false}"
   fi
 
@@ -541,6 +561,20 @@ ssh_policy_enabled_disabled_label() {
   esac
 }
 
+ssh_root_remote_login_enabled_disabled_label() {
+  case "${1:-unknown}" in
+    no|disabled|false)
+      printf '%s\n' "disabled"
+      ;;
+    yes|enabled|true|prohibit-password|without-password|forced-commands-only)
+      printf '%s\n' "enabled"
+      ;;
+    *)
+      printf '%s\n' "unknown"
+      ;;
+  esac
+}
+
 ssh_readiness_label() {
   case "${1:-unknown}" in
     yes|ready|true)
@@ -618,6 +652,14 @@ ssh_port_is_listening_locally() {
   local port="${1:-}"
   [[ -n "${port}" ]] || return 1
   listening_tcp_ports | grep -Fxq "${port}"
+}
+
+swap_fstab_line() {
+  printf '%s\n' "/swapfile none swap sw 0 0"
+}
+
+swap_fstab_present() {
+  grep -Fqx "$(swap_fstab_line)" /etc/fstab 2>/dev/null
 }
 
 set_runtime_admin_user() {
@@ -801,6 +843,78 @@ replace_file_with_tmp_if_changed() {
 
   mv "${tmp_file}" "${target}"
   log info "Managed file updated: ${target}"
+}
+
+remove_file_if_exists() {
+  local target="${1:-}"
+
+  [[ -n "${target}" ]] || return 0
+  [[ -e "${target}" ]] || return 0
+
+  if is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
+    log info "[plan] remove file if exists: ${target}"
+    return 0
+  fi
+
+  rm -f "${target}"
+  log info "Removed file: ${target}"
+}
+
+replace_managed_block_in_file() {
+  local target="$1"
+  local begin_marker="$2"
+  local end_marker="$3"
+  local block_content="$4"
+  local backup_existing="${5:-false}"
+  local tmp_file=""
+  local block_file=""
+
+  [[ -n "${target}" && -n "${begin_marker}" && -n "${end_marker}" ]] || die "replace_managed_block_in_file requires target and markers."
+
+  tmp_file="$(mktemp)"
+  block_file="$(mktemp)"
+  {
+    printf '%s\n' "${begin_marker}"
+    if [[ -n "${block_content}" ]]; then
+      printf '%s\n' "${block_content}"
+    fi
+    printf '%s\n' "${end_marker}"
+  } >"${block_file}"
+
+  if [[ -f "${target}" ]]; then
+    awk -v begin_marker="${begin_marker}" -v end_marker="${end_marker}" -v block_file="${block_file}" '
+      index($0, begin_marker) {
+        while ((getline line < block_file) > 0) {
+          print line
+        }
+        in_block = 1
+        replaced = 1
+        next
+      }
+      in_block {
+        if (index($0, end_marker)) {
+          in_block = 0
+        }
+        next
+      }
+      { print }
+      END {
+        if (!replaced) {
+          if (NR > 0) {
+            print ""
+          }
+          while ((getline line < block_file) > 0) {
+            print line
+          }
+        }
+      }
+    ' "${target}" >"${tmp_file}"
+  else
+    cat "${block_file}" >"${tmp_file}"
+  fi
+
+  rm -f "${block_file}"
+  replace_file_with_tmp_if_changed "${target}" "${tmp_file}" "${backup_existing}"
 }
 
 ensure_directory() {
@@ -1365,6 +1479,118 @@ effective_ssh_port_for_changes() {
   fi
 
   printf '%s\n' "${SSH_PORT}"
+}
+
+sshd_main_config_path() {
+  printf '/etc/ssh/sshd_config\n'
+}
+
+sshd_managed_begin_marker() {
+  printf '# BEGIN VPS BOOTSTRAP MANAGED SSH SETTINGS\n'
+}
+
+sshd_managed_end_marker() {
+  printf '# END VPS BOOTSTRAP MANAGED SSH SETTINGS\n'
+}
+
+sshd_legacy_dropin_paths() {
+  printf '%s\n' "/etc/ssh/sshd_config.d/99-vps-bootstrap.conf"
+  printf '%s\n' "/etc/ssh/sshd_config.d/999-vps-root-login-cutover.conf"
+}
+
+sshd_build_managed_settings_block() {
+  local port="${1:-22}"
+  local pubkey_auth="${2:-yes}"
+  local password_auth="${3:-yes}"
+  local kbd_auth="${4:-no}"
+  local permit_root_login="${5:-yes}"
+
+  cat <<EOF
+# Managed by VPS bootstrap project.
+Port ${port}
+PubkeyAuthentication ${pubkey_auth}
+PasswordAuthentication ${password_auth}
+KbdInteractiveAuthentication ${kbd_auth}
+PermitRootLogin ${permit_root_login}
+PermitEmptyPasswords no
+UsePAM yes
+X11Forwarding no
+LoginGraceTime 30
+MaxAuthTries 3
+EOF
+}
+
+sshd_apply_managed_settings() {
+  local port="${1:-22}"
+  local pubkey_auth="${2:-yes}"
+  local password_auth="${3:-yes}"
+  local kbd_auth="${4:-no}"
+  local permit_root_login="${5:-yes}"
+  local legacy_dropin=""
+  local target=""
+  local block_content=""
+
+  target="$(sshd_main_config_path)"
+  block_content="$(sshd_build_managed_settings_block "${port}" "${pubkey_auth}" "${password_auth}" "${kbd_auth}" "${permit_root_login}")"
+
+  if [[ ! -f "${target}" ]]; then
+    die "sshd 主配置不存在：${target}"
+  fi
+
+  while IFS= read -r legacy_dropin; do
+    [[ -n "${legacy_dropin}" ]] || continue
+    remove_file_if_exists "${legacy_dropin}"
+  done < <(sshd_legacy_dropin_paths)
+
+  replace_managed_block_in_file \
+    "${target}" \
+    "$(sshd_managed_begin_marker)" \
+    "$(sshd_managed_end_marker)" \
+    "${block_content}" \
+    "true"
+}
+
+sshd_config_source_files() {
+  local dropin=""
+
+  for dropin in /etc/ssh/sshd_config.d/*.conf; do
+    [[ -f "${dropin}" ]] || continue
+    printf '%s\n' "${dropin}"
+  done | awk '!seen[$0]++'
+  printf '%s\n' "$(sshd_main_config_path)"
+}
+
+sshd_directive_source_lines() {
+  local directive="${1:-}"
+  local file=""
+  local normalized=""
+
+  [[ -n "${directive}" ]] || return 1
+  normalized="$(printf '%s\n' "${directive}" | tr '[:upper:]' '[:lower:]')"
+
+  while IFS= read -r file; do
+    [[ -r "${file}" ]] || continue
+    awk -v file="${file}" -v normalized="${normalized}" '
+      /^[[:space:]]*#/ { next }
+      {
+        key = tolower($1)
+        if (key == normalized) {
+          print file ":" NR ": " $0
+        }
+      }
+    ' "${file}"
+  done < <(sshd_config_source_files)
+}
+
+sshd_last_directive_source_line() {
+  local directive="${1:-}"
+  local last_line=""
+
+  while IFS= read -r last_line; do
+    [[ -n "${last_line}" ]] || continue
+  done < <(sshd_directive_source_lines "${directive}" || true)
+
+  [[ -n "${last_line}" ]] && printf '%s\n' "${last_line}"
 }
 
 current_permit_root_login_mode() {

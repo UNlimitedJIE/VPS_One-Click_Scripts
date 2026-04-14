@@ -2,367 +2,176 @@
 set -euo pipefail
 
 # Module: 11_verify
-# Purpose: 对初始化后的关键状态做验证检查。
-# Preconditions: root；Debian 12。
-# Steps:
-#   1. 检查系统版本、用户、公钥、sshd 配置
-#   2. 检查关键服务状态
-#   3. 输出通过项与警告项
-# Idempotency:
-#   - 纯验证模块，可反复执行
+# Purpose: 验收初始化第 2 到第 10 步的实际系统状态。
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
 source "${SCRIPT_DIR}/../lib/common.sh"
 
-verify_ok() {
-  log info "[OK] $*"
+failures=0
+warnings=0
+pending=0
+VERIFY_REPORT=""
+
+append_report_block() {
+  local block="${1:-}"
+  VERIFY_REPORT+="${block}"$'\n'
 }
 
-verify_warn() {
-  log warn "[WARN] $*"
-  warnings=$((warnings + 1))
+emit_section() {
+  local title="${1:-}"
+  local block=""
+
+  block=$'\n'"${title}"$'\n'
+  printf '%s' "${block}"
+  append_report_block "${block}"
 }
 
-verify_pending() {
-  log info "[PENDING] $*"
-  pending=$((pending + 1))
-}
-
-verify_fail() {
-  log_raw "ERROR" "[ERROR] $*"
-  failures=$((failures + 1))
-}
-
-verify_summary_swap_status() {
-  local swap_state=""
-  local swap_show=""
-
-  if has_active_swap; then
-    swap_show="$(swapon --show --noheadings --output NAME,SIZE,USED,PRIO 2>/dev/null || true)"
-    [[ -n "${swap_show}" ]] || swap_show="$(swapon --show --noheadings 2>/dev/null || true)"
-    [[ -n "${swap_show}" ]] || swap_show="active"
-    printf '%s\n' "active (${swap_show})"
-    return 0
-  fi
-
-  swap_state="$(get_state "SWAP_STATUS" || true)"
-  case "${swap_state}" in
-    skipped)
-      printf '%s\n' "not enabled (user skipped)"
+record_status_count() {
+  case "${1:-}" in
+    ERROR)
+      failures=$((failures + 1))
       ;;
-    existing-kept)
-      printf '%s\n' "existing swap kept unchanged"
+    WARN)
+      warnings=$((warnings + 1))
       ;;
-    created-*|replaced-*)
-      printf '%s\n' "expected active after ${swap_state}, but no active swap is currently visible"
-      ;;
-    manual-review)
-      printf '%s\n' "manual review required"
-      ;;
-    *)
-      if [[ -f /swapfile ]]; then
-        printf '%s\n' "/swapfile exists, but no active swap is currently enabled"
-      else
-        printf '%s\n' "not active"
-      fi
+    PENDING)
+      pending=$((pending + 1))
       ;;
   esac
 }
 
-print_verify_terminal_summary() {
-  local admin_status="not configured"
-  local auth_status="not ready"
-  local ssh_pubkey_readiness="not ready"
-  local root_status="unknown"
-  local nftables_status="disabled"
-  local time_sync_status="disabled"
-  local auto_updates_status="disabled"
-  local fail2ban_status="not installed"
-  local swap_status=""
-  local account_password_status="unknown"
-  local ssh_password_policy="unknown"
-  local ssh_pubkey_policy="unknown"
-  local sudo_mode_summary="unknown"
-  local sudo_password_impl="unknown"
-  local last_auth_method="unable to determine from current logs"
-  local summary=""
+emit_check() {
+  local level="$1"
+  local title="$2"
+  local current="$3"
+  local expected="$4"
+  local evidence="$5"
+  local conclusion="$6"
+  local block=""
 
-  if [[ -n "${ADMIN_USER:-}" ]] && id -u "${ADMIN_USER}" >/dev/null 2>&1; then
-    admin_status="${ADMIN_USER}"
-  fi
-
-  if [[ -n "${ADMIN_USER:-}" ]] && admin_authorized_keys_ready_for_user "${ADMIN_USER}"; then
-    auth_status="ready ($(admin_authorized_keys_count_for_user "${ADMIN_USER}") key(s))"
-    ssh_pubkey_readiness="ready"
-  fi
-
-  if [[ -n "${ADMIN_USER:-}" ]]; then
-    account_password_status="$(user_account_password_state_label "${ADMIN_USER}")"
-  fi
-
-  root_status="$(ssh_policy_enabled_disabled_label "$(current_permit_root_login_mode || true)")"
-
-  if service_enabled "nftables" && service_active "nftables"; then
-    nftables_status="enabled and active"
-  fi
-
-  if service_enabled "systemd-timesyncd" && service_active "systemd-timesyncd"; then
-    time_sync_status="enabled and active"
-  fi
-
-  if service_exists "unattended-upgrades" && service_enabled "unattended-upgrades"; then
-    auto_updates_status="enabled"
-    if service_active "unattended-upgrades"; then
-      auto_updates_status="enabled and active"
-    fi
-  fi
-
-  if service_exists "fail2ban"; then
-    if service_enabled "fail2ban" && service_active "fail2ban"; then
-      fail2ban_status="enabled and active"
-    else
-      fail2ban_status="installed but not fully active"
-    fi
-  fi
-
-  swap_status="$(verify_summary_swap_status)"
-  ssh_password_policy="$(ssh_policy_enabled_disabled_label "$(current_password_authentication_mode || true)")"
-  ssh_pubkey_policy="$(ssh_policy_enabled_disabled_label "$(current_pubkey_authentication_mode || true)")"
-  sudo_mode_summary="$(detect_admin_sudo_mode 2>/dev/null || printf 'unknown')"
-  sudo_password_impl="$(detect_admin_sudo_password_implementation 2>/dev/null || printf 'unknown')"
-  if [[ -n "${ADMIN_USER:-}" ]]; then
-    last_auth_method="$(ssh_last_successful_auth_method_label "$(last_successful_ssh_auth_method_for_user "${ADMIN_USER}")")"
-  fi
-
-  summary="$(cat <<EOF
-=== Verification Summary ===
-Errors: ${failures}
-Warnings: ${warnings}
-Pending: ${pending}
-Admin user: ${admin_status}
-Account password: ${account_password_status}
-Sudo mode: ${sudo_mode_summary}
-Sudo password implementation: ${sudo_password_impl}
-Effective SSH port: $(effective_ssh_port_for_changes)
-SSH password auth current policy: ${ssh_password_policy:-unknown}
-SSH public key current policy: ${ssh_pubkey_policy:-unknown}
-SSH public key login readiness: ${ssh_pubkey_readiness}
-Root remote login current policy: ${root_status}
-authorized_keys: ${auth_status}
-Last observed successful SSH auth method: ${last_auth_method}
-nftables: ${nftables_status}
-time sync: ${time_sync_status}
-auto updates: ${auto_updates_status}
-fail2ban: ${fail2ban_status}
-swap: ${swap_status}
-Manual note: password-only 测试若仍成功，说明 SSH 密码登录还没真正关掉。
-Publickey-only test: $(ssh_force_publickey_test_command "${ADMIN_USER:-<ADMIN_USER>}" "$(effective_ssh_port_for_changes)")
-Password-only test: $(ssh_force_password_test_command "${ADMIN_USER:-<ADMIN_USER>}" "$(effective_ssh_port_for_changes)")
+  record_status_count "${level}"
+  block="$(cat <<EOF
+[${level}] ${title}
+Current: ${current}
+Expected: ${expected}
+Evidence: ${evidence}
+Conclusion: ${conclusion}
 EOF
 )"
-
-  printf '\n%s\n' "${summary}"
+  printf '%s\n' "${block}"
+  append_report_block "${block}"
 }
 
-shortcut_target_path() {
-  printf '/usr/local/bin/j\n'
-}
+service_state_summary() {
+  local unit="${1:-}"
 
-verify_shortcut_wrapper() {
-  local target=""
-  target="$(shortcut_target_path)"
-
-  if [[ ! -e "${target}" ]]; then
-    verify_warn "Shortcut j not installed: ${target}"
+  if ! service_exists "${unit}"; then
+    printf '%s\n' "not installed"
     return 0
   fi
 
-  if [[ ! -x "${target}" ]]; then
-    verify_fail "Shortcut exists but is not executable: ${target}"
-    return 0
-  fi
-  verify_ok "Shortcut exists and is executable: ${target}"
-
-  if grep -Fq '/opt/VPS_One-Click_Scripts' "${target}" && grep -Fq 'current_home="${HOME:-}"' "${target}" && grep -Fq '/root/VPS_One-Click_Scripts' "${target}" && grep -Fq 'config/local.conf' "${target}" && grep -Fq '[j] Runtime project root:' "${target}" && grep -Fq 'Multiple project copies detected' "${target}"; then
-    verify_ok "Shortcut wrapper includes runtime project discovery, copy warning and local.conf logic"
-  else
-    verify_fail "Shortcut wrapper is missing /opt, \$HOME, /root, copy warning or local.conf discovery logic"
-  fi
-}
-
-verify_project_copy_layout() {
-  local runtime_root=""
-  local current_dir=""
-  local active_root=""
-  local copy=""
-  local -a copies=()
-
-  runtime_root="$(discover_runtime_project_root || true)"
-  current_dir="$(pwd -P 2>/dev/null || pwd)"
-  active_root="${runtime_root:-${PROJECT_ROOT}}"
-
-  verify_ok "Current PROJECT_ROOT=${PROJECT_ROOT}"
-  verify_ok "Current shell directory=${current_dir}"
-
-  if [[ -n "${runtime_root}" ]]; then
-    verify_ok "Preferred runtime project root=${runtime_root}"
-  else
-    verify_pending "No readable runtime project root detected in /opt, \$HOME or /root"
-  fi
-
-  mapfile -t copies < <(list_detected_project_copies)
-  if ((${#copies[@]} == 0)); then
-    verify_pending "No project copies detected in /opt, \$HOME or /root"
-  else
-    verify_ok "Detected project copies: ${copies[*]}"
-  fi
-
-  if [[ -n "${runtime_root}" && "${PROJECT_ROOT}" != "${runtime_root}" ]]; then
-    verify_warn "Current execution root differs from the preferred runtime root: PROJECT_ROOT=${PROJECT_ROOT}, runtime=${runtime_root}"
-  fi
-
-  if [[ -n "${runtime_root}" && "${current_dir}" != "${runtime_root}" ]]; then
-    verify_warn "Current shell directory differs from the shortcut runtime root: cwd=${current_dir}, runtime=${runtime_root}"
-  fi
-
-  if ((${#copies[@]} > 1)); then
-    verify_warn "Multiple project copies detected. Active runtime copy: ${active_root}"
-    for copy in "${copies[@]}"; do
-      [[ "${copy}" == "${active_root}" ]] || verify_warn "Other project copy: ${copy}"
-    done
-    verify_warn "更新目录与运行目录可能不一致。"
-    if selection_contains "$(shared_project_root)" "${copies[@]}" && selection_contains "/root/VPS_One-Click_Scripts" "${copies[@]}"; then
-      verify_warn "Both /opt and /root project copies exist; keep $(shared_project_root) as the only runtime and maintenance directory."
-    fi
-  fi
-
-  if [[ "${active_root}" == "$(shared_project_root)" ]]; then
-    log info "[INFO] If the system has switched to /opt runtime, future git/grep/code edits should be done in $(shared_project_root)."
-  fi
-}
-
-verify_active_config_chain() {
-  local local_config=""
-  local_config="${PROJECT_ROOT}/config/local.conf"
-
-  if [[ -n "${ACTIVE_CONFIG_CHAIN:-}" ]]; then
-    verify_ok "ACTIVE_CONFIG_CHAIN=${ACTIVE_CONFIG_CHAIN}"
-  else
-    verify_warn "ACTIVE_CONFIG_CHAIN is empty"
-  fi
-
-  if [[ -f "${local_config}" && "${ACTIVE_CONFIG_CHAIN:-}" != *"${local_config}"* ]]; then
-    verify_warn "config/local.conf exists but is missing from ACTIVE_CONFIG_CHAIN: ${local_config}"
-  fi
-}
-
-verify_dependency_chain_state() {
-  local dependency=""
-  local assessment=""
-
-  while IFS= read -r dependency; do
-    [[ -n "${dependency}" ]] || continue
-    [[ "${dependency}" == "11_verify" ]] && continue
-
-    assessment="$(dependency_assessment_status "${dependency}")"
-    case "${assessment}" in
-      completion_state_found)
-        verify_ok "Dependency ${dependency}: completion state found"
-        ;;
-      state_missing_but_conditions_satisfied)
-        verify_pending "Dependency ${dependency}: completion state missing, but prerequisite conditions appear satisfied"
-        ;;
-      *)
-        verify_warn "Dependency ${dependency}: completion state missing and prerequisite conditions are not satisfied"
-        ;;
-    esac
-  done < <(registry_unique_dependencies "init")
-}
-
-verify_configured_runtime_values() {
-  local target_keys_ready="no"
-
-  if [[ -n "${ADMIN_USER:-}" ]] && admin_authorized_keys_ready_for_user "${ADMIN_USER}"; then
-    target_keys_ready="yes"
-  fi
-
-  if [[ -n "${ADMIN_USER:-}" ]]; then
-    verify_ok "Configured ADMIN_USER=${ADMIN_USER}"
-  else
-    verify_pending "Configured ADMIN_USER is empty"
-  fi
-
-  if [[ -n "${AUTHORIZED_KEYS_FILE:-}" ]]; then
-    if [[ -f "${AUTHORIZED_KEYS_FILE}" ]]; then
-      if [[ "$(count_valid_ssh_keys_in_file "${AUTHORIZED_KEYS_FILE}")" -gt 0 ]]; then
-        verify_ok "Configured AUTHORIZED_KEYS_FILE=${AUTHORIZED_KEYS_FILE}"
-      else
-        verify_pending "Configured AUTHORIZED_KEYS_FILE has no valid public key yet: ${AUTHORIZED_KEYS_FILE}"
-      fi
-    elif [[ "${target_keys_ready}" == "yes" ]]; then
-      if authorized_keys_source_is_root_only_path "${AUTHORIZED_KEYS_FILE}"; then
-        log info "[INFO] AUTHORIZED_KEYS_FILE 当前指向 /root 下路径；若目标账户 authorized_keys 已安装，可忽略此提示。"
-        log info "[INFO] Suggestion: future source path can be moved to $(preferred_authorized_keys_source_path)."
-      else
-        log info "[INFO] AUTHORIZED_KEYS_FILE 源文件当前不可访问或不存在，但目标账户 authorized_keys 已安装完成。"
-      fi
-    elif authorized_keys_source_is_root_only_path "${AUTHORIZED_KEYS_FILE}"; then
-      verify_pending "Configured AUTHORIZED_KEYS_FILE points to /root and is not ready yet: ${AUTHORIZED_KEYS_FILE}. Normal flow should use $(preferred_authorized_keys_source_path)."
-    else
-      verify_pending "Configured AUTHORIZED_KEYS_FILE is not ready yet: ${AUTHORIZED_KEYS_FILE}"
-    fi
-  else
-    verify_pending "Configured AUTHORIZED_KEYS_FILE is empty"
-  fi
-}
-
-verify_admin_can_read_project_bootstrap() {
-  local runtime_root=""
-  local target_root=""
-
-  if [[ -z "${ADMIN_USER}" ]]; then
-    verify_pending "ADMIN_USER is empty; skip project readability check"
+  if service_enabled "${unit}" && service_active "${unit}"; then
+    printf '%s\n' "enabled and active"
     return 0
   fi
 
-  if ! id -u "${ADMIN_USER}" >/dev/null 2>&1; then
-    verify_pending "Admin user missing; skip project readability check: ${ADMIN_USER}"
+  if service_enabled "${unit}"; then
+    printf '%s\n' "enabled"
     return 0
   fi
 
-  runtime_root="$(discover_runtime_project_root || true)"
-  target_root="${runtime_root:-${PROJECT_ROOT}}"
-
-  if sudo -u "${ADMIN_USER}" test -r "${target_root}/bootstrap.sh"; then
-    verify_ok "Admin user can read runtime bootstrap.sh: ${target_root}/bootstrap.sh"
-  else
-    verify_warn "Admin user cannot read runtime bootstrap.sh: ${target_root}/bootstrap.sh"
-    if [[ "${target_root}" == /root/* ]]; then
-      verify_warn "当前运行目录位于 /root，下次切换到管理用户后无法直接使用 j；应先迁移到 /opt/VPS_One-Click_Scripts 并重装 shortcut。"
-    fi
+  if service_active "${unit}"; then
+    printf '%s\n' "active"
+    return 0
   fi
+
+  printf '%s\n' "inactive"
+}
+
+package_version_or_missing() {
+  local package_name="${1:-}"
+  dpkg-query -W -f='${Version}' "${package_name}" 2>/dev/null || printf '%s\n' "missing"
+}
+
+openssl_version_or_missing() {
+  if command_exists openssl; then
+    openssl version 2>/dev/null || printf '%s\n' "unknown"
+    return 0
+  fi
+  printf '%s\n' "missing"
+}
+
+apt_upgradable_packages() {
+  apt list --upgradable 2>/dev/null | awk -F/ 'NR > 1 && $1 != "Listing..." { print $1 }'
+}
+
+timedatectl_value() {
+  local key="${1:-}"
+  timedatectl show --property="${key}" --value 2>/dev/null || true
+}
+
+nftables_ssh_port_allowed_in_file() {
+  local port="${1:-}"
+  [[ -n "${port}" ]] || return 1
+  [[ -r /etc/nftables.conf ]] || return 1
+  grep -Eq "tcp dport ${port} accept" /etc/nftables.conf
+}
+
+swap_status_summary() {
+  local swap_show=""
+  local fstab_state="no"
+  local state_hint=""
+
+  if swap_fstab_present; then
+    fstab_state="yes"
+  fi
+
+  swap_show="$(swapon --show --noheadings --output NAME,SIZE,USED,PRIO 2>/dev/null || true)"
+  [[ -n "${swap_show}" ]] || swap_show="(none)"
+  state_hint="$(get_state "SWAP_STATUS" || true)"
+
+  printf '/swapfile=%s; swapon=%s; fstab=%s; state=%s\n' \
+    "$(if [[ -f /swapfile ]]; then printf present; else printf absent; fi)" \
+    "${swap_show}" \
+    "${fstab_state}" \
+    "${state_hint:-unknown}"
 }
 
 detect_admin_sudo_mode() {
   local dropin_path=""
+  local sudo_group_enabled="no"
+  local user_in_sudo_group="no"
+
   if [[ -z "${ADMIN_USER:-}" ]] || ! id -u "${ADMIN_USER}" >/dev/null 2>&1; then
     printf '%s\n' "unknown"
     return 0
   fi
 
   dropin_path="/etc/sudoers.d/90-${ADMIN_USER}"
-
-  if [[ -f "${dropin_path}" ]]; then
-    if grep -Fqx "${ADMIN_USER} ALL=(ALL:ALL) NOPASSWD: ALL" "${dropin_path}"; then
-      printf '%s\n' "nopasswd"
-      return 0
-    fi
-    printf '%s\n' "unknown"
+  if [[ -f "${dropin_path}" && "$(grep -Fxc "${ADMIN_USER} ALL=(ALL:ALL) NOPASSWD: ALL" "${dropin_path}" 2>/dev/null || true)" -gt 0 ]]; then
+    printf '%s\n' "nopasswd"
     return 0
   fi
 
-  printf '%s\n' "password"
+  if id -nG "${ADMIN_USER}" 2>/dev/null | tr ' ' '\n' | grep -Fxq "sudo"; then
+    user_in_sudo_group="yes"
+  fi
+  if grep -RqsE '^[[:space:]]*%sudo[[:space:]]+ALL=\(ALL(:ALL)?\)[[:space:]]+ALL' /etc/sudoers /etc/sudoers.d 2>/dev/null; then
+    sudo_group_enabled="yes"
+  fi
+
+  if [[ "${user_in_sudo_group}" == "yes" && "${sudo_group_enabled}" == "yes" ]]; then
+    printf '%s\n' "password"
+    return 0
+  fi
+
+  if grep -RqsE "^[[:space:]]*${ADMIN_USER}[[:space:]]+ALL=\\(ALL(:ALL)?\\)[[:space:]]+ALL" /etc/sudoers /etc/sudoers.d 2>/dev/null; then
+    printf '%s\n' "password"
+    return 0
+  fi
+
+  printf '%s\n' "no-sudo"
 }
 
 detect_admin_sudo_password_implementation() {
@@ -378,427 +187,641 @@ detect_admin_sudo_password_implementation() {
       implementation="$(get_state "ADMIN_SUDO_PASSWORD_IMPLEMENTATION" || true)"
       printf '%s\n' "${implementation:-account-password}"
       ;;
+    no-sudo)
+      printf '%s\n' "n/a"
+      ;;
     *)
       printf '%s\n' "unknown"
       ;;
   esac
 }
 
-verify_admin_sudo_behavior() {
-  local sudo_mode=""
+run_admin_sudo_runtime_probe() {
   local sudo_output=""
   local sudo_status=0
+  local current_user=""
 
-  if [[ -z "${ADMIN_USER}" ]]; then
-    verify_pending "ADMIN_USER is empty; skip sudo behavior check"
+  current_user="$(id -un 2>/dev/null || true)"
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    sudo_output="$(env LC_ALL=C LANG=C sudo -u "${ADMIN_USER}" sudo -n true 2>&1)" || sudo_status=$?
+    printf '%s\t%s\n' "${sudo_status}" "${sudo_output:-<no output>}"
     return 0
   fi
 
-  if ! id -u "${ADMIN_USER}" >/dev/null 2>&1; then
-    verify_pending "Admin user missing; skip sudo behavior check: ${ADMIN_USER}"
+  if [[ -n "${current_user}" && "${current_user}" == "${ADMIN_USER}" ]]; then
+    sudo_output="$(env LC_ALL=C LANG=C sudo -n true 2>&1)" || sudo_status=$?
+    printf '%s\t%s\n' "${sudo_status}" "${sudo_output:-<no output>}"
     return 0
   fi
 
-  if ! command_exists sudo; then
-    verify_fail "sudo command not found"
+  printf '%s\t%s\n' "125" "runtime probe skipped: run verify as root or as ${ADMIN_USER} to execute sudo -n true"
+}
+
+check_step_2_base_update() {
+  local openssh_version=""
+  local openssl_version=""
+  local missing_packages=()
+  local package_name=""
+  local kept_back=()
+  local upgradable=()
+  local current=""
+  local evidence=""
+  local conclusion=""
+  local level="OK"
+
+  openssh_version="$(package_version_or_missing "openssh-server")"
+  openssl_version="$(openssl_version_or_missing)"
+
+  for package_name in sudo openssh-server rsync git procps; do
+    package_installed "${package_name}" || missing_packages+=("${package_name}")
+  done
+
+  mapfile -t kept_back < <(apt_list_kept_back_packages 2>/dev/null || true)
+  mapfile -t upgradable < <(apt_upgradable_packages 2>/dev/null || true)
+
+  current="openssh-server=${openssh_version}; openssl=${openssl_version}; upgradable=${#upgradable[@]}; kept-back=$(if ((${#kept_back[@]} > 0)); then printf '%s' "${kept_back[*]}"; else printf none; fi)"
+  evidence="dpkg-query/openssl version, apt list --upgradable, apt-get -s upgrade"
+
+  if ((${#missing_packages[@]} > 0)); then
+    level="ERROR"
+    conclusion="关键基础包缺失：${missing_packages[*]}；第 2 步结果不通过。"
+  elif apt_kept_back_requires_warning "${kept_back[@]:-}"; then
+    level="WARN"
+    conclusion="存在关键 kept-back 包，需要人工复核；当前属于保守升级后的待确认状态。"
+  elif ((${#upgradable[@]} > 0 || ${#kept_back[@]} > 0)); then
+    level="PENDING"
+    conclusion="基础更新执行过，但仍有可升级或 kept-back 包；这更像后续维护项，而不是当前阻塞。"
+  else
+    conclusion="关键基础包已安装，当前未发现 kept-back 或待升级阻塞项。"
+  fi
+
+  emit_check \
+    "${level}" \
+    "第 2 步 系统基础更新状态" \
+    "${current}" \
+    "关键基础包已安装；无关键 kept-back 包阻塞后续步骤" \
+    "${evidence}" \
+    "${conclusion}"
+}
+
+check_step_3_admin_account() {
+  local current=""
+  local evidence=""
+
+  if [[ -z "${ADMIN_USER:-}" ]]; then
+    emit_check \
+      "ERROR" \
+      "第 3 步 管理用户账户" \
+      "ADMIN_USER 为空" \
+      "必须存在明确的管理用户" \
+      "配置来源：${ACTIVE_CONFIG_CHAIN:-unknown}" \
+      "管理用户还没有被明确配置。"
+    return 0
+  fi
+
+  if id -u "${ADMIN_USER}" >/dev/null 2>&1; then
+    current="用户 ${ADMIN_USER} 已存在，home=$(home_dir_for_user "${ADMIN_USER}")"
+    evidence="getent passwd ${ADMIN_USER}"
+    emit_check \
+      "OK" \
+      "第 3 步 管理用户账户" \
+      "${current}" \
+      "管理用户存在，且 home 目录可解析" \
+      "${evidence}" \
+      "管理用户账户已经就绪。"
+    return 0
+  fi
+
+  emit_check \
+    "ERROR" \
+    "第 3 步 管理用户账户" \
+    "用户 ${ADMIN_USER} 不存在" \
+    "管理用户必须已经创建" \
+    "getent passwd ${ADMIN_USER} 无结果" \
+    "第 3 步未通过，后续 SSH 接入也不会成立。"
+}
+
+check_step_3_sudo_mode() {
+  local sudo_mode=""
+  local sudo_impl=""
+  local sudo_probe=""
+  local sudo_output=""
+  local sudo_status=0
+  local current=""
+  local evidence=""
+  local conclusion=""
+  local level="OK"
+
+  if [[ -z "${ADMIN_USER:-}" ]] || ! id -u "${ADMIN_USER}" >/dev/null 2>&1; then
+    emit_check \
+      "PENDING" \
+      "第 3 步 sudo 行为" \
+      "无法检查，管理用户不存在" \
+      "应明确为 nopasswd 或 password" \
+      "ADMIN_USER 不可用" \
+      "必须先让管理用户存在，才能验收 sudo 行为。"
     return 0
   fi
 
   sudo_mode="$(detect_admin_sudo_mode)"
-  case "${sudo_mode}" in
-    nopasswd|password)
-      verify_ok "Detected admin sudo mode: ${sudo_mode}"
-      ;;
-    *)
-      verify_fail "Unable to determine admin sudo mode from /etc/sudoers.d/90-${ADMIN_USER}"
-      return 0
-      ;;
-  esac
+  sudo_impl="$(detect_admin_sudo_password_implementation)"
+  sudo_probe="$(run_admin_sudo_runtime_probe)"
+  sudo_status="$(printf '%s\n' "${sudo_probe}" | cut -f1)"
+  sudo_output="$(printf '%s\n' "${sudo_probe}" | cut -f2-)"
 
-  sudo_output="$(
-    env LC_ALL=C LANG=C sudo -u "${ADMIN_USER}" sudo -n true 2>&1
-  )" || sudo_status=$?
+  current="mode=${sudo_mode}; implementation=${sudo_impl}; sudo -n status=${sudo_status}"
+  evidence="/etc/sudoers.d/90-${ADMIN_USER}; id -nG ${ADMIN_USER}; sudo runtime probe => ${sudo_output:-<no output>}"
 
   case "${sudo_mode}" in
     nopasswd)
       if [[ "${sudo_status}" -eq 0 ]]; then
-        verify_ok "sudo -n works for ${ADMIN_USER} in nopasswd mode"
+        conclusion="当前是免密 sudo，且运行时验证通过。"
+      elif [[ "${sudo_status}" -eq 125 ]]; then
+        level="PENDING"
+        conclusion="sudoers 配置显示当前应为 nopasswd，但这次 verify 不是以 root 或 ${ADMIN_USER} 身份运行，未执行运行时探测。"
       else
-        verify_fail "Expected nopasswd sudo for ${ADMIN_USER}, but sudo -n failed: ${sudo_output:-<no output>}"
+        level="ERROR"
+        conclusion="配置看起来是 nopasswd，但运行时 sudo -n 失败，说明 sudo 配置没有真正生效。"
       fi
       ;;
     password)
       if [[ "${sudo_status}" -eq 0 ]]; then
-        verify_fail "Expected password-required sudo for ${ADMIN_USER}, but sudo -n succeeded"
-      elif [[ "${sudo_output}" == *"password is required"* ]]; then
-        verify_ok "sudo for ${ADMIN_USER} requires a password as expected"
+        level="ERROR"
+        conclusion="当前看起来应为 password 模式，但 sudo -n 直接成功，和目标不一致。"
+      elif [[ "${sudo_status}" -eq 125 ]]; then
+        conclusion="当前 sudo 需要密码；这次 verify 未执行运行时探测，但当前实现仍依赖账户密码，而不是独立 sudo 密码。"
       else
-        verify_fail "Expected password-required sudo for ${ADMIN_USER}, but got: ${sudo_output:-<no output>}"
+        conclusion="当前 sudo 需要密码；实现方式仍是账户密码，而不是独立 sudo 密码。"
       fi
       ;;
+    no-sudo)
+      level="ERROR"
+      conclusion="当前没有检测到该管理用户的有效 sudo 权限；这与第 3 步目标不一致。"
+      ;;
+    *)
+      level="ERROR"
+      conclusion="无法确定 sudo 模式。"
+      ;;
   esac
+
+  emit_check \
+    "${level}" \
+    "第 3 步 sudo 行为" \
+    "${current}" \
+    "应明确为 nopasswd 或 password；若为 password，当前实现仍依赖账户密码" \
+    "${evidence}" \
+    "${conclusion}"
 }
 
-verify_sshd_effective_settings() {
-  local sshd_output=""
+check_step_3_account_password() {
+  local state_label=""
+  local state_value=""
+  local sudo_mode=""
+  local level="OK"
+  local conclusion=""
+
+  if [[ -z "${ADMIN_USER:-}" ]] || ! id -u "${ADMIN_USER}" >/dev/null 2>&1; then
+    emit_check \
+      "PENDING" \
+      "第 3 步 本地账户密码状态" \
+      "无法检查，管理用户不存在" \
+      "应为 keep / set / lock 的某一种实际状态" \
+      "ADMIN_USER 不可用" \
+      "必须先让管理用户存在，才能验收账户密码状态。"
+    return 0
+  fi
+
+  state_value="$(user_account_password_state "${ADMIN_USER}")"
+  state_label="$(user_account_password_state_label "${ADMIN_USER}")"
+  sudo_mode="$(detect_admin_sudo_mode)"
+
+  if [[ "${state_value}" == "unknown" ]]; then
+    level="PENDING"
+    conclusion="当前会话无法可靠读取该用户的 shadow 密码状态；请用 root 重新运行 verify，或把这项只当作辅助信息。"
+  elif [[ "${state_value}" == "locked_or_unset" && "${sudo_mode}" == "password" ]]; then
+    level="ERROR"
+    conclusion="当前 sudo 需要密码，但账户密码又处于未设置或已锁定状态，这两者互相冲突。"
+  else
+    conclusion="账户密码状态与 SSH 公钥登录是两条独立线；这里只反映本地/密码类认证现状。"
+  fi
+
+  emit_check \
+    "${level}" \
+    "第 3 步 本地账户密码状态" \
+    "${state_label}" \
+    "应与 sudo 模式兼容；lock 不应破坏既定接入策略" \
+    "getent shadow / user_account_password_state" \
+    "${conclusion}"
+}
+
+check_step_4_authorized_keys() {
+  local source_file=""
+  local source_key_count="0"
+  local auth_file=""
+  local ssh_dir=""
+  local auth_meta=""
+  local ssh_meta=""
+  local target_key_count="0"
+  local current=""
+  local evidence=""
+  local conclusion=""
+  local level="OK"
+
+  if [[ -z "${ADMIN_USER:-}" ]] || ! id -u "${ADMIN_USER}" >/dev/null 2>&1; then
+    emit_check \
+      "ERROR" \
+      "第 4 步 目标账户 authorized_keys" \
+      "无法检查，管理用户不存在" \
+      "目标用户 .ssh/authorized_keys 必须真实存在且权限正确" \
+      "ADMIN_USER 不可用" \
+      "第 4 步未通过。"
+    return 0
+  fi
+
+  source_file="$(preferred_authorized_keys_source_path)"
+  source_key_count="$(count_valid_ssh_keys_in_file "${source_file}")"
+  auth_file="$(admin_authorized_keys_file_for_user "${ADMIN_USER}")"
+  ssh_dir="$(admin_ssh_dir_for_user "${ADMIN_USER}")"
+
+  if [[ -d "${ssh_dir}" ]]; then
+    ssh_meta="$(stat -c '%U:%G %a' "${ssh_dir}" 2>/dev/null || true)"
+  else
+    ssh_meta="missing"
+  fi
+
+  if [[ -f "${auth_file}" ]]; then
+    auth_meta="$(stat -c '%U:%G %a' "${auth_file}" 2>/dev/null || true)"
+    target_key_count="$(count_valid_ssh_keys_in_file "${auth_file}")"
+  else
+    auth_meta="missing"
+  fi
+
+  current="source=${source_file} (${source_key_count} key); target=${auth_file}; ssh_dir=${ssh_meta}; auth_file=${auth_meta}; target_keys=${target_key_count}"
+  evidence="stat ${ssh_dir} ${auth_file}; count_valid_ssh_keys_in_file"
+
+  if admin_authorized_keys_install_valid_for_user "${ADMIN_USER}"; then
+    conclusion="目标账户 authorized_keys 已真实安装成功，safe gate 的前置条件成立。"
+  elif [[ "${source_key_count}" -gt 0 ]]; then
+    level="ERROR"
+    conclusion="源文件已有有效公钥，但目标账户 authorized_keys 仍未安装成功；这正是第 4.4 需要修复的状态。"
+  else
+    level="ERROR"
+    conclusion="固定源文件和目标账户 authorized_keys 都还没有就绪。"
+  fi
+
+  emit_check \
+    "${level}" \
+    "第 4 步 目标账户 authorized_keys" \
+    "${current}" \
+    "目标文件存在、属主属组正确、权限正确、至少 1 条有效 key" \
+    "${evidence}" \
+    "${conclusion}"
+}
+
+check_step_4_5_ssh_policy() {
   local password_auth=""
   local pubkey_auth=""
   local kbd_auth=""
   local permit_root_login=""
   local port=""
-  local runtime_port=""
-  local safe_gate_state=""
-  local cutover_state=""
+  local auth_ready="no"
+  local expected_password_auth="no"
+  local password_source=""
+  local pubkey_source=""
+  local root_source=""
+  local current=""
+  local expected=""
+  local evidence=""
+  local conclusion=""
+  local level="OK"
 
-  if ! command_exists sshd; then
-    verify_fail "sshd command not found"
-    return 0
-  fi
+  password_auth="$(current_password_authentication_mode || true)"
+  pubkey_auth="$(current_pubkey_authentication_mode || true)"
+  kbd_auth="$(current_kbdinteractive_authentication_mode || true)"
+  permit_root_login="$(current_permit_root_login_mode || true)"
+  port="$(current_ssh_port)"
 
-  sshd_output="$(sshd -T 2>&1)" || {
-    verify_fail "sshd -T failed: ${sshd_output:-<no output>}"
-    return 0
-  }
-
-  password_auth="$(sshd_effective_value "passwordauthentication" "${sshd_output}")"
-  pubkey_auth="$(sshd_effective_value "pubkeyauthentication" "${sshd_output}")"
-  kbd_auth="$(sshd_effective_value "kbdinteractiveauthentication" "${sshd_output}")"
-  permit_root_login="$(sshd_effective_value "permitrootlogin" "${sshd_output}")"
-  port="$(sshd_effective_value "port" "${sshd_output}")"
-  runtime_port="$(current_ssh_port)"
-  safe_gate_state="$(get_state "SSH_SAFE_GATE_PASSED" || true)"
-  cutover_state="$(get_state "ADMIN_LOGIN_CUTOVER" || true)"
-
-  if [[ -n "${password_auth}" ]]; then
-    if [[ "${password_auth}" == "no" ]]; then
-      verify_ok "SSH password auth current policy: disabled"
-    elif is_false "${DISABLE_PASSWORD_LOGIN}" ; then
-      verify_ok "SSH password auth current policy: enabled (intentionally left enabled)"
-    elif is_true "${DISABLE_PASSWORD_LOGIN}" && [[ "${safe_gate_state}" != "yes" ]]; then
-      verify_pending "SSH password auth current policy: enabled; safe gate not passed yet, so password login still remains enabled during preparation"
-    else
-      verify_warn "SSH password auth current policy: enabled"
-    fi
+  if ssh_publickey_login_ready_for_user "${ADMIN_USER:-}"; then
+    auth_ready="yes"
   else
-    verify_fail "Unable to read passwordauthentication from sshd -T"
+    auth_ready="no"
+    expected_password_auth="yes"
   fi
 
-  if [[ "${pubkey_auth}" == "yes" ]]; then
-    verify_ok "SSH public key current policy: enabled"
-  elif [[ -n "${pubkey_auth}" ]]; then
-    verify_fail "SSH public key current policy: ${pubkey_auth}"
+  if is_false "${DISABLE_PASSWORD_LOGIN:-true}"; then
+    expected_password_auth="yes"
+  fi
+
+  password_source="$(sshd_last_directive_source_line "PasswordAuthentication" || true)"
+  pubkey_source="$(sshd_last_directive_source_line "PubkeyAuthentication" || true)"
+  root_source="$(sshd_last_directive_source_line "PermitRootLogin" || true)"
+
+  current="pubkey=${pubkey_auth:-unknown}; password=${password_auth:-unknown}; kbd=${kbd_auth:-unknown}; permitrootlogin=${permit_root_login:-unknown}; port=${port}; safe_gate=$(if [[ "${auth_ready}" == "yes" ]]; then printf yes; else printf no; fi)"
+  expected="pubkey=yes; password=${expected_password_auth}; kbd=no; permitrootlogin=no after step 5 cutover; port=$(effective_ssh_port_for_changes)"
+  evidence="sshd -T; PubkeyAuthentication source=${pubkey_source:-not found}; PasswordAuthentication source=${password_source:-not found}; PermitRootLogin source=${root_source:-not found}"
+
+  if [[ "${pubkey_auth}" != "yes" ]]; then
+    level="ERROR"
+    conclusion="当前 PubkeyAuthentication 不是 yes；来源已经在 Evidence 中列出，这与第 4 步目标策略直接冲突。"
+  elif [[ "${password_auth}" != "${expected_password_auth}" ]]; then
+    level="ERROR"
+    conclusion="当前 PasswordAuthentication 与 safe gate 应有的状态不一致；Evidence 已指出显式配置来源。"
+  elif [[ "${kbd_auth}" != "no" ]]; then
+    level="ERROR"
+    conclusion="当前 KbdInteractiveAuthentication 仍未关闭，不符合脚本的基线目标。"
+  elif [[ "${permit_root_login}" != "no" ]]; then
+    level="ERROR"
+    conclusion="第 5 步切换尚未真正完成；当前 root 远程登录仍然开放。"
   else
-    verify_fail "Unable to read pubkeyauthentication from sshd -T"
+    conclusion="SSH 实际生效值与脚本目标一致；safe gate 和最终 cutover 都已达成。"
   fi
 
-  if [[ -n "${kbd_auth}" ]]; then
-    if [[ "${kbd_auth}" == "no" ]]; then
-      verify_ok "SSH keyboard-interactive current policy: disabled"
-    elif [[ "${safe_gate_state}" != "yes" ]]; then
-      verify_pending "SSH keyboard-interactive current policy: enabled; safe gate not passed yet, so keyboard-interactive auth still remains enabled during preparation"
-    else
-      verify_warn "SSH keyboard-interactive current policy: enabled"
-    fi
-  else
-    verify_pending "Unable to read kbdinteractiveauthentication from sshd -T"
-  fi
-
-  if [[ -n "${permit_root_login}" ]]; then
-    if [[ "${permit_root_login}" == "no" ]]; then
-      verify_ok "Root remote login current policy: disabled"
-    elif [[ "${cutover_state}" != "yes" ]]; then
-      verify_pending "Root remote login current policy: enabled; final cutover has not been completed yet"
-    else
-      verify_warn "Root remote login current policy: enabled"
-    fi
-  else
-    verify_fail "Unable to read permitrootlogin from sshd -T"
-  fi
-
-  if [[ -n "${port}" ]]; then
-    verify_ok "sshd -T port=${port}"
-    log info "[INFO] Current effective SSH port: ${port}"
-    if ssh_port_is_listening_locally "${port}"; then
-      verify_ok "Local listening check passed for SSH port ${port}"
-    else
-      verify_fail "Local listening check failed for SSH port ${port}"
-    fi
-  else
-    verify_fail "Unable to read port from sshd -T"
-  fi
-
-  if [[ -n "${runtime_port}" && -n "${port}" && "${runtime_port}" != "${port}" ]]; then
-    verify_warn "current_ssh_port reports ${runtime_port}, while sshd -T reports ${port}"
-  fi
-
-  log info "[INFO] sshd -T only verifies effective local SSH settings; external SSH connectivity still needs a separate manual login test."
+  emit_check \
+    "${level}" \
+    "第 4/5 步 SSH 接入与收紧状态" \
+    "${current}" \
+    "${expected}" \
+    "${evidence}" \
+    "${conclusion}"
 }
 
-verify_admin_account_password_state() {
-  local password_state=""
-  local sudo_mode=""
-
-  if [[ -z "${ADMIN_USER:-}" ]]; then
-    verify_pending "ADMIN_USER is empty; skip account password state check"
-    return 0
-  fi
-
-  if ! id -u "${ADMIN_USER}" >/dev/null 2>&1; then
-    verify_pending "Admin user missing; skip account password state check: ${ADMIN_USER}"
-    return 0
-  fi
-
-  password_state="$(user_account_password_state "${ADMIN_USER}")"
-  sudo_mode="$(detect_admin_sudo_mode)"
-
-  case "${password_state}" in
-    set)
-      verify_ok "Admin local account password state: $(user_account_password_state_label "${ADMIN_USER}")"
-      ;;
-    locked_or_unset)
-      if [[ "${sudo_mode}" == "password" ]]; then
-        verify_fail "Admin local account password is locked or unset, but sudo mode is password"
-      else
-        verify_pending "Admin local account password state: $(user_account_password_state_label "${ADMIN_USER}")"
-      fi
-      ;;
-    *)
-      verify_pending "Admin local account password state: $(user_account_password_state_label "${ADMIN_USER}")"
-      ;;
-  esac
-}
-
-verify_last_observed_ssh_auth_method() {
+check_step_4_5_ssh_auth_method() {
   local auth_method=""
   local auth_label=""
   local auth_line=""
-
-  if [[ -z "${ADMIN_USER:-}" ]]; then
-    verify_pending "ADMIN_USER is empty; skip SSH auth log inspection"
-    return 0
-  fi
+  local level="OK"
+  local conclusion=""
 
   auth_method="$(last_successful_ssh_auth_method_for_user "${ADMIN_USER}")"
   auth_label="$(ssh_last_successful_auth_method_label "${auth_method}")"
   auth_line="$(last_successful_ssh_auth_line_for_user "${ADMIN_USER}" || true)"
 
-  if [[ "${auth_method}" == "unknown" ]]; then
-    verify_pending "Last observed successful SSH auth method for ${ADMIN_USER}: ${auth_label}"
-  else
-    verify_ok "Last observed successful SSH auth method for ${ADMIN_USER}: ${auth_label}"
-  fi
+  case "${auth_method}" in
+    publickey)
+      conclusion="最近一次成功 SSH 认证已经是 publickey，符合最终目标。"
+      ;;
+    password)
+      level="WARN"
+      conclusion="最近一次成功 SSH 认证仍是 password，说明你至少还观测到密码登录成功过；需要继续做 password-only 失败测试。"
+      ;;
+    *)
+      level="PENDING"
+      conclusion="当前日志还不足以判断最近一次成功认证方式；需要补做手工 SSH 验证。"
+      ;;
+  esac
 
-  if [[ -n "${auth_line}" ]]; then
-    log info "[INFO] Last successful SSH auth log line: ${auth_line}"
-  fi
-  log info "[INFO] Publickey-only test: $(ssh_force_publickey_test_command "${ADMIN_USER:-<ADMIN_USER>}" "$(effective_ssh_port_for_changes)")"
-  log info "[INFO] Password-only test: $(ssh_force_password_test_command "${ADMIN_USER:-<ADMIN_USER>}" "$(effective_ssh_port_for_changes)")"
+  emit_check \
+    "${level}" \
+    "第 4/5 步 最近一次成功 SSH 登录方式" \
+    "${auth_label}" \
+    "最终应观察到 publickey；password-only 测试应失败" \
+    "${auth_line:-journalctl/auth.log 中暂无可判定行}" \
+    "${conclusion}"
 }
 
-verify_admin_authorized_keys_target() {
-  local home_dir=""
-  local ssh_dir=""
-  local auth_file=""
-  local ssh_owner_mode=""
-  local auth_owner_mode=""
-  local key_count="0"
-  local safe_gate_state=""
-  local fallback_source=""
+check_step_6_nftables() {
+  local service_state=""
+  local port=""
+  local file_state="missing"
+  local file_rule_state="missing"
+  local current=""
+  local conclusion=""
+  local level="OK"
 
-  if [[ -z "${ADMIN_USER}" ]]; then
-    verify_pending "ADMIN_USER is empty; skip .ssh permission checks"
-    return 0
+  service_state="$(service_state_summary "nftables")"
+  port="$(effective_ssh_port_for_changes)"
+  [[ -f /etc/nftables.conf ]] && file_state="present"
+  if nftables_ssh_port_allowed_in_file "${port}"; then
+    file_rule_state="ssh-port-allowed"
   fi
 
-  if ! id -u "${ADMIN_USER}" >/dev/null 2>&1; then
-    verify_pending "Admin user missing; skip .ssh permission checks: ${ADMIN_USER}"
-    return 0
-  fi
+  current="service=${service_state}; config=/etc/nftables.conf(${file_state}); effective_ssh_port=${port}; rule_state=${file_rule_state}"
 
-  home_dir="$(home_dir_for_user "${ADMIN_USER}")"
-  [[ -n "${home_dir}" ]] || {
-    verify_fail "Unable to determine home directory for ${ADMIN_USER}"
-    return 0
-  }
-
-  ssh_dir="${home_dir}/.ssh"
-  auth_file="${ssh_dir}/authorized_keys"
-  safe_gate_state="$(get_state "SSH_SAFE_GATE_PASSED" || true)"
-  verify_ok "Target authorized_keys path=${auth_file}"
-
-  if [[ ! -d "${ssh_dir}" ]]; then
-    if [[ "${safe_gate_state}" == "yes" ]]; then
-      verify_fail "SSH directory missing even though SSH_SAFE_GATE_PASSED=yes: ${ssh_dir}"
-    else
-      verify_pending "SSH directory missing: ${ssh_dir}"
-    fi
+  if [[ "${service_state}" != "enabled and active" || "${file_state}" != "present" || "${file_rule_state}" != "ssh-port-allowed" ]]; then
+    level="ERROR"
+    conclusion="nftables 当前没有完整达到“已启用且已放行当前 SSH 端口”的目标。"
   else
-    ssh_owner_mode="$(stat -c '%U:%G %a' "${ssh_dir}" 2>/dev/null || true)"
-    if [[ "${ssh_owner_mode}" == "${ADMIN_USER}:${ADMIN_USER} 700" ]]; then
-      verify_ok "SSH directory ownership and mode are correct: ${ssh_dir}"
-    else
-      verify_fail "SSH directory ownership/mode mismatch for ${ssh_dir}: ${ssh_owner_mode:-<unknown>}"
-    fi
+    conclusion="nftables 已启用，且当前 SSH 端口规则已在配置文件中明确放行。"
   fi
 
-  if [[ -f "${auth_file}" ]]; then
-    verify_ok "authorized_keys exists: ${auth_file}"
-    auth_owner_mode="$(stat -c '%U:%G %a' "${auth_file}" 2>/dev/null || true)"
-    if [[ "${auth_owner_mode}" == "${ADMIN_USER}:${ADMIN_USER} 600" ]]; then
-      verify_ok "authorized_keys ownership and mode are correct: ${auth_file}"
-    else
-      verify_fail "authorized_keys ownership/mode mismatch for ${auth_file}: ${auth_owner_mode:-<unknown>}"
-    fi
+  emit_check \
+    "${level}" \
+    "第 6 步 nftables 状态" \
+    "${current}" \
+    "nftables enabled and active；/etc/nftables.conf 存在；当前 SSH 端口已放行" \
+    "systemctl is-enabled/is-active nftables；/etc/nftables.conf" \
+    "${conclusion}"
+}
+
+check_step_7_time_sync() {
+  local service_state=""
+  local ntp_enabled=""
+  local ntp_synced=""
+  local timezone_value=""
+  local current=""
+  local level="OK"
+  local conclusion=""
+
+  service_state="$(service_state_summary "systemd-timesyncd")"
+  ntp_enabled="$(timedatectl_value "NTP")"
+  ntp_synced="$(timedatectl_value "NTPSynchronized")"
+  timezone_value="$(timedatectl_value "Timezone")"
+  current="service=${service_state}; timezone=${timezone_value:-unknown}; NTP=${ntp_enabled:-unknown}; NTPSynchronized=${ntp_synced:-unknown}"
+
+  if [[ "${service_state}" != "enabled and active" ]]; then
+    level="ERROR"
+    conclusion="timesyncd 当前未正常启用。"
+  elif [[ "${ntp_enabled}" != "yes" || "${ntp_synced}" != "yes" ]]; then
+    level="PENDING"
+    conclusion="时间同步服务已启用，但当前还没看到明确同步成功。"
   else
-    if [[ "${safe_gate_state}" == "yes" ]]; then
-      verify_fail "authorized_keys missing even though SSH_SAFE_GATE_PASSED=yes: ${auth_file}"
-    else
-      verify_pending "authorized_keys missing: ${auth_file}"
-    fi
+    conclusion="时间同步服务已启用，且当前已经同步。"
   fi
 
-  key_count="$(count_valid_ssh_keys_in_file "${auth_file}")"
-  if [[ "${key_count}" -gt 0 ]]; then
-    verify_ok "Valid authorized_keys count for ${ADMIN_USER}: ${key_count}"
+  emit_check \
+    "${level}" \
+    "第 7 步 时间同步状态" \
+    "${current}" \
+    "systemd-timesyncd enabled and active；NTP=yes；NTPSynchronized=yes" \
+    "timedatectl show；systemctl is-enabled/is-active systemd-timesyncd" \
+    "${conclusion}"
+}
+
+check_step_8_auto_updates() {
+  local service_state=""
+  local config_file="/etc/apt/apt.conf.d/20auto-upgrades"
+  local config_state="missing"
+  local current=""
+  local level="OK"
+  local conclusion=""
+
+  service_state="$(service_state_summary "unattended-upgrades")"
+  if [[ -f "${config_file}" ]]; then
+    config_state="$(tr '\n' ';' <"${config_file}" 2>/dev/null)"
+  fi
+
+  current="service=${service_state}; config=${config_state}"
+
+  if [[ ! -f "${config_file}" ]]; then
+    level="ERROR"
+    conclusion="自动更新配置文件缺失。"
+  elif ! grep -Fq 'APT::Periodic::Update-Package-Lists "1";' "${config_file}" || ! grep -Fq 'APT::Periodic::Unattended-Upgrade "1";' "${config_file}"; then
+    level="ERROR"
+    conclusion="20auto-upgrades 存在，但关键项没有设为 1。"
+  elif [[ "${service_state}" != "enabled and active" && "${service_state}" != "enabled" ]]; then
+    level="WARN"
+    conclusion="配置文件已写入，但 unattended-upgrades 服务没有处于启用状态。"
   else
-    if [[ "${safe_gate_state}" == "yes" ]]; then
-      verify_fail "Valid authorized_keys count for ${ADMIN_USER} is 0 even though SSH_SAFE_GATE_PASSED=yes"
-    else
-      verify_pending "Valid authorized_keys count for ${ADMIN_USER}: ${key_count}"
-    fi
+    conclusion="自动安全更新配置已落地，服务也处于可用状态。"
   fi
 
-  if [[ "${safe_gate_state}" == "yes" ]]; then
-    verify_ok "SSH_SAFE_GATE_PASSED=${safe_gate_state}"
+  emit_check \
+    "${level}" \
+    "第 8 步 自动安全更新状态" \
+    "${current}" \
+    "20auto-upgrades 存在且关键项为 1；unattended-upgrades 已启用" \
+    "${config_file}; systemctl is-enabled/is-active unattended-upgrades" \
+    "${conclusion}"
+}
+
+check_step_9_fail2ban() {
+  local service_state=""
+  local jail_output=""
+  local current=""
+  local level="OK"
+  local conclusion=""
+
+  service_state="$(service_state_summary "fail2ban")"
+  if command_exists fail2ban-client; then
+    jail_output="$(fail2ban-client status sshd 2>/dev/null | tr '\n' ';' || true)"
+  fi
+  [[ -n "${jail_output}" ]] || jail_output="unavailable"
+
+  current="service=${service_state}; jail=${jail_output}"
+
+  if [[ "${service_state}" != "enabled and active" ]]; then
+    level="ERROR"
+    conclusion="Fail2Ban 服务当前没有正常启用。"
+  elif [[ "${jail_output}" == "unavailable" ]]; then
+    level="WARN"
+    conclusion="Fail2Ban 服务可用，但当前拿不到 sshd jail 状态。"
   else
-    verify_pending "SSH_SAFE_GATE_PASSED=${safe_gate_state:-<unset>}"
+    conclusion="Fail2Ban 已启用，且当前能读取 sshd jail 状态。"
   fi
 
-  if [[ -n "${AUTHORIZED_KEYS_FILE:-}" && -f "${AUTHORIZED_KEYS_FILE}" && ! -f "${auth_file}" ]]; then
-    if [[ "${safe_gate_state}" == "yes" ]]; then
-      verify_warn "Configured AUTHORIZED_KEYS_FILE exists, but target authorized_keys is missing: ${AUTHORIZED_KEYS_FILE} -> ${auth_file}"
-    else
-      verify_pending "Configured AUTHORIZED_KEYS_FILE exists, but target authorized_keys is missing: ${AUTHORIZED_KEYS_FILE} -> ${auth_file}"
-    fi
+  emit_check \
+    "${level}" \
+    "第 9 步 Fail2Ban 状态" \
+    "${current}" \
+    "fail2ban enabled and active；sshd jail 可读" \
+    "/etc/fail2ban/jail.d/sshd.local；systemctl is-enabled/is-active fail2ban；fail2ban-client status sshd" \
+    "${conclusion}"
+}
+
+check_step_10_swap() {
+  local swap_summary=""
+  local swap_state=""
+  local level="OK"
+  local conclusion=""
+
+  swap_summary="$(swap_status_summary)"
+  swap_state="$(get_state "SWAP_STATUS" || true)"
+
+  if has_active_swap && swap_fstab_present; then
+    conclusion="swap 已启用，并且 /etc/fstab 已写入。"
+  elif has_active_swap && ! swap_fstab_present; then
+    level="WARN"
+    conclusion="swap 当前已启用，但 /etc/fstab 没有对应项，重启后可能丢失。"
+  elif [[ "${swap_state}" == "skipped" ]]; then
+    conclusion="当前无 swap，但历史选择是 skip；这可以视为一次明确决策。"
+  elif [[ -f /swapfile ]]; then
+    level="WARN"
+    conclusion="/swapfile 已存在，但当前并未启用 swap。"
+  else
+    level="PENDING"
+    conclusion="当前没有 active swap，也没有看到明确的 skip 痕迹。"
   fi
 
-  fallback_source="$(bootstrap_authorized_keys_fallback_path)"
-  if [[ -z "${AUTHORIZED_KEYS_FILE:-}" && -f "${fallback_source}" && ! -f "${auth_file}" ]]; then
-    if [[ "${safe_gate_state}" == "yes" ]]; then
-      verify_warn "Fallback authorized_keys source exists, but target authorized_keys is missing: ${fallback_source} -> ${auth_file}"
-    else
-      verify_pending "Fallback authorized_keys source exists, but target authorized_keys is missing: ${fallback_source} -> ${auth_file}"
-    fi
+  emit_check \
+    "${level}" \
+    "第 10 步 swap 状态" \
+    "${swap_summary}" \
+    "若启用则应有 active swap 和 fstab 项；若跳过则应是明确 skip 决策" \
+    "swapon --show；/etc/fstab；/swapfile；runtime state 仅作辅助" \
+    "${conclusion}"
+}
+
+print_final_summary() {
+  local overall_status="PASS"
+  local manual_next_step=""
+  local summary_block=""
+
+  if (( failures > 0 )); then
+    overall_status="FAIL"
+  elif (( warnings > 0 || pending > 0 )); then
+    overall_status="CHECK"
+  fi
+
+  manual_next_step="继续使用下面两条命令做人类验收：$(ssh_force_publickey_test_command "${ADMIN_USER:-<ADMIN_USER>}" "$(effective_ssh_port_for_changes)") ; $(ssh_force_password_test_command "${ADMIN_USER:-<ADMIN_USER>}" "$(effective_ssh_port_for_changes)")"
+
+  summary_block="$(cat <<EOF
+
+=== Acceptance Summary ===
+Overall: ${overall_status}
+Errors: ${failures}
+Warnings: ${warnings}
+Pending: ${pending}
+Last observed successful SSH auth method: $(ssh_last_successful_auth_method_label "$(last_successful_ssh_auth_method_for_user "${ADMIN_USER}")")
+Current effective SSH port: $(effective_ssh_port_for_changes)
+Current SSH password auth policy: $(ssh_policy_enabled_disabled_label "$(current_password_authentication_mode || true)")
+Current SSH public key policy: $(ssh_policy_enabled_disabled_label "$(current_pubkey_authentication_mode || true)")
+Current root remote login policy: $(ssh_root_remote_login_enabled_disabled_label "$(current_permit_root_login_mode || true)")
+Next step: ${manual_next_step}
+Reminder: ${SNAPSHOT_REMINDER}
+EOF
+)"
+
+  printf '%s\n' "${summary_block}"
+  append_report_block "${summary_block}"
+
+  set_state "VERIFY_WARNINGS" "${warnings}"
+  set_state "VERIFY_FAILURES" "${failures}"
+  set_state "VERIFY_PENDING" "${pending}"
+  set_state "VERIFY_OVERALL" "${overall_status}"
+
+  if [[ -n "${STATE_DIR:-}" ]]; then
+    mkdir -p "${STATE_DIR}" 2>/dev/null || true
+    printf '%s\n' "${VERIFY_REPORT}" >"${STATE_DIR}/acceptance-summary.txt" 2>/dev/null || true
   fi
 }
 
 main() {
   load_config
   init_runtime
-  module_banner "11_verify" "初始化后的验证检查"
-  require_root
+  module_banner "11_verify" "初始化第 2-10 步验收"
 
-  printf '\n=== Verification Checks ===\n'
+  emit_section "=== Initialization Acceptance: Steps 2-10 ==="
 
-  local warnings=0
-  local failures=0
-  local pending=0
-  local cutover_state=""
+  check_step_2_base_update
 
-  verify_active_config_chain
-  verify_dependency_chain_state
-  verify_project_copy_layout
-  verify_configured_runtime_values
+  emit_section "-- Step 3 / 4 管理用户接入 --"
+  check_step_3_admin_account
+  check_step_3_sudo_mode
+  check_step_3_account_password
+  check_step_4_authorized_keys
 
-  if is_debian12; then
-    verify_ok "Debian 12 detected"
-  else
-    verify_fail "Expected Debian 12, got $(pretty_os_name)"
-  fi
+  emit_section "-- Step 4 / 5 SSH 接入与收紧 --"
+  check_step_4_5_ssh_policy
+  check_step_4_5_ssh_auth_method
 
-  if [[ -n "${ADMIN_USER}" ]] && id -u "${ADMIN_USER}" >/dev/null 2>&1; then
-    verify_ok "Admin user exists: ${ADMIN_USER}"
-  else
-    verify_pending "Admin user missing: ${ADMIN_USER}"
-  fi
+  emit_section "-- Step 6-10 关键服务与系统状态 --"
+  check_step_6_nftables
+  check_step_7_time_sync
+  check_step_8_auto_updates
+  check_step_9_fail2ban
+  check_step_10_swap
 
-  if [[ -n "${ADMIN_USER}" ]] && authorized_keys_present_for_user "${ADMIN_USER}"; then
-    verify_ok "authorized_keys detected for ${ADMIN_USER}"
-  else
-    verify_pending "No valid authorized_keys detected for ${ADMIN_USER:-<unset>}"
-  fi
-
-  if command_exists sshd && sshd -t >/dev/null 2>&1; then
-    verify_ok "sshd configuration test passed"
-  else
-    verify_fail "sshd configuration test failed"
-  fi
-
-  cutover_state="$(get_state "ADMIN_LOGIN_CUTOVER" || true)"
-  if root_ssh_login_disabled; then
-    verify_ok "Root remote SSH login is disabled"
-  elif [[ "${cutover_state}" == "yes" ]]; then
-    verify_warn "Root remote SSH login is still allowed"
-  else
-    verify_pending "Root remote SSH login is still allowed; final cutover has not been completed yet"
-  fi
-
-  if ssh_port_change_pending_confirmation; then
-    verify_warn "SSH port is configured as ${SSH_PORT}, but confirmation is still missing."
-    log warn "[WARN] Current effective SSH port remains $(effective_ssh_port_for_changes). Confirm cloud firewall/security-group and rerun the merged admin-access stage plus the nftables step."
-  fi
-
-  if service_enabled "nftables" && service_active "nftables"; then
-    verify_ok "nftables enabled and active"
-  else
-    verify_warn "nftables not enabled/active"
-  fi
-
-  if service_enabled "systemd-timesyncd" && service_active "systemd-timesyncd"; then
-    verify_ok "systemd-timesyncd enabled and active"
-  else
-    verify_warn "systemd-timesyncd not enabled/active"
-  fi
-
-  if service_exists "fail2ban"; then
-    if service_enabled "fail2ban" && service_active "fail2ban"; then
-      verify_ok "fail2ban enabled and active"
-    else
-      verify_warn "fail2ban installed but not enabled/active"
-    fi
-  fi
-
-  local swap_state=""
-  swap_state="$(get_state "SWAP_STATUS" || true)"
-  if has_active_swap; then
-    verify_ok "swap is active"
-  elif [[ "${swap_state}" == "skipped" ]]; then
-    verify_pending "swap is not active (user skipped swap setup)"
-  elif [[ -f /swapfile ]]; then
-    verify_warn "/swapfile exists, but no active swap is enabled"
-  else
-    verify_pending "swap is not active"
-  fi
-
-  verify_shortcut_wrapper
-  verify_admin_can_read_project_bootstrap
-  verify_admin_account_password_state
-  verify_admin_sudo_behavior
-  verify_sshd_effective_settings
-  verify_last_observed_ssh_auth_method
-  verify_admin_authorized_keys_target
-
-  set_state "VERIFY_WARNINGS" "${warnings}"
-  set_state "VERIFY_FAILURES" "${failures}"
-  set_state "VERIFY_PENDING" "${pending}"
-
-  print_verify_terminal_summary
-
-  if (( failures > 0 )); then
-    log warn "Verification finished with ${failures} failure(s), ${warnings} warning(s), and ${pending} pending item(s)."
-  else
-    log info "Verification finished with ${warnings} warning(s) and ${pending} pending item(s)."
-  fi
+  print_final_summary
 }
 
 main "$@"

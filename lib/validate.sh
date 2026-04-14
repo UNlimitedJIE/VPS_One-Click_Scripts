@@ -102,6 +102,31 @@ trim_surrounding_whitespace() {
   printf '%s\n' "${value}"
 }
 
+swap_size_validation_error() {
+  local size_value=""
+  size_value="$(trim_surrounding_whitespace "${1:-}")"
+
+  if [[ -z "${size_value}" ]]; then
+    printf '%s\n' "swap 大小不能为空。"
+    return 0
+  fi
+
+  if [[ ! "${size_value}" =~ ^[0-9]+[GgMm]$ ]]; then
+    printf '%s\n' "swap 大小只支持类似 512M、1G、2G、4G 的格式。"
+    return 0
+  fi
+}
+
+normalize_swap_size_value() {
+  local size_value=""
+  local error_message=""
+
+  size_value="$(trim_surrounding_whitespace "${1:-}")"
+  error_message="$(swap_size_validation_error "${size_value}" || true)"
+  [[ -z "${error_message}" ]] || return 1
+  printf '%s\n' "${size_value^^}"
+}
+
 ssh_public_key_type_allowed() {
   case "${1:-}" in
     ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521|sk-ssh-ed25519@openssh.com|sk-ecdsa-sha2-nistp256@openssh.com)
@@ -176,6 +201,10 @@ validate_config() {
     fi
   fi
   preferred_source="$(preferred_authorized_keys_source_path)"
+
+  if [[ -n "${AUTHORIZED_KEYS_FILE:-}" && "${AUTHORIZED_KEYS_FILE}" != "${preferred_source}" ]]; then
+    log info "当前 AUTHORIZED_KEYS_FILE=${AUTHORIZED_KEYS_FILE}，但第 4 步实际固定优先使用 ${preferred_source}；若该固定源无有效公钥，脚本会直接进入现场粘贴模式。"
+  fi
 
   if [[ -n "${AUTHORIZED_KEYS_FILE}" && ! -f "${AUTHORIZED_KEYS_FILE}" ]]; then
     if authorized_keys_source_is_root_only_path "${AUTHORIZED_KEYS_FILE}" && [[ "${EUID}" -ne 0 ]]; then

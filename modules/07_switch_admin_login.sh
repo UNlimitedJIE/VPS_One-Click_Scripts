@@ -163,26 +163,19 @@ main() {
   prepare_project_access_for_cutover
   confirm_cutover_execution || return $?
 
-  local target_file=""
-  local content=""
-  local ssh_service=""
-
-  target_file="/etc/ssh/sshd_config.d/999-vps-root-login-cutover.conf"
-  content="$(cat <<EOF
-# Managed by VPS bootstrap project.
-# Purpose: final SSH login cutover to admin-user-based access.
-
-PermitRootLogin no
-PubkeyAuthentication yes
-EOF
-)"
-
-  apply_managed_file "${target_file}" "0644" "${content}" "true"
+  sshd_apply_managed_settings \
+    "$(effective_ssh_port_for_changes)" \
+    "yes" \
+    "no" \
+    "no" \
+    "no"
   validate_sshd_config
 
-  ssh_service="$(ssh_service_name)"
-  reload_service_if_exists "${ssh_service}"
+  reload_service_if_exists "$(ssh_service_name)"
   ssh_port_is_listening_locally "$(effective_ssh_port_for_changes)" || die "关闭 root 远程登录后，未检测到目标 SSH 端口在本机监听。请检查 sshd 状态。"
+  [[ "$(current_permit_root_login_mode || true)" == "no" ]] || die "关闭 root 远程登录后，当前 permitrootlogin 仍不是 no。请检查 $(sshd_last_directive_source_line "PermitRootLogin" || printf '/etc/ssh/sshd_config')."
+  [[ "$(current_pubkey_authentication_mode || true)" == "yes" ]] || die "关闭 root 远程登录后，当前 pubkeyauthentication 仍不是 yes。"
+  [[ "$(current_password_authentication_mode || true)" == "no" ]] || die "关闭 root 远程登录后，当前 passwordauthentication 仍不是 no。"
 
   set_state "ROOT_SSH_MODE" "no"
   set_state "ADMIN_LOGIN_CUTOVER" "yes"

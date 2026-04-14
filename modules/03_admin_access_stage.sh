@@ -186,7 +186,12 @@ stage_connection_summary() {
   local safe_gate_state=""
   local admin_ready="no"
   local password_policy=""
+  local pubkey_policy=""
+  local kbd_policy=""
   local root_policy=""
+  local password_policy_state=""
+  local pubkey_policy_state=""
+  local root_policy_state=""
   local target_password_policy=""
   local target_pubkey_policy=""
   local target_kbd_policy=""
@@ -196,7 +201,12 @@ stage_connection_summary() {
   effective_port="$(effective_ssh_port_for_changes)"
   safe_gate_state="$(get_state "SSH_SAFE_GATE_PASSED" || true)"
   password_policy="$(current_password_authentication_mode || true)"
+  pubkey_policy="$(current_pubkey_authentication_mode || true)"
+  kbd_policy="$(current_kbdinteractive_authentication_mode || true)"
   root_policy="$(current_permit_root_login_mode || true)"
+  password_policy_state="$(ssh_policy_enabled_disabled_label "${password_policy}")"
+  pubkey_policy_state="$(ssh_policy_enabled_disabled_label "${pubkey_policy}")"
+  root_policy_state="$(ssh_root_remote_login_enabled_disabled_label "${root_policy}")"
   target_password_policy="$(get_state "SSH_AUTH_TARGET_PASSWORD" || true)"
   target_pubkey_policy="$(get_state "SSH_AUTH_TARGET_PUBKEY" || true)"
   target_kbd_policy="$(get_state "SSH_AUTH_TARGET_KBD" || true)"
@@ -217,9 +227,14 @@ stage_connection_summary() {
 - 管理用户已创建：${admin_ready}
 - 当前有效 SSH 端口：${effective_port}
 - SSH 目标策略：pubkey=$(ssh_policy_enabled_disabled_label "${target_pubkey_policy:-yes}") / password=$(ssh_policy_enabled_disabled_label "${target_password_policy:-no}") / keyboard-interactive=$(ssh_policy_enabled_disabled_label "${target_kbd_policy:-no}")
-- 当前 SSH 密码登录：$(ssh_policy_enabled_disabled_label "${password_policy}")
-- 当前 SSH 公钥登录：${auth_ready}
-- 当前 root 远程登录：$(ssh_policy_enabled_disabled_label "${root_policy}")
+- 当前 SSH 密码登录：${password_policy_state}
+- 当前 SSH 公钥策略：${pubkey_policy_state}
+- 当前 root 远程登录：${root_policy_state}
+- 当前 pubkeyauthentication 实际值：${pubkey_policy:-unknown}
+- 当前 passwordauthentication 实际值：${password_policy:-unknown}
+- 当前 kbdinteractiveauthentication 实际值：${kbd_policy:-unknown}
+- 当前 permitrootlogin 实际值：${root_policy:-unknown}
+- 当前 SSH 公钥登录就绪度：${auth_ready}
 - 目标账户 authorized_keys：${auth_ready}
 - SSH safe gate：${safe_gate_state:-no}
 - 当前是否满足进入第 5 步的条件：${step5_ready}

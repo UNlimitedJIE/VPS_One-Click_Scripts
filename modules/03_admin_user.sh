@@ -197,6 +197,32 @@ capture_account_password_value() {
   done
 }
 
+confirm_account_password_lock_risk() {
+  local answer=""
+
+  while true; do
+    if ! ui_prompt_input \
+      "第 4.3 段 锁定账户密码风险确认" \
+      "当前目标用户 authorized_keys 还没有安装成功。\n\n如果你现在锁账户密码，而 SSH 公钥又未安装成功，该用户将无法通过密码登录。\n\n输入 yes 继续锁定；输入 0 返回重新选择：" \
+      "0"; then
+      return 1
+    fi
+
+    answer="$(ui_trim_value "${UI_LAST_INPUT}")"
+    case "${answer}" in
+      yes|YES|y|Y)
+        return 0
+        ;;
+      0|"")
+        return 1
+        ;;
+      *)
+        ui_warn_message "输入无效" "请输入 yes 继续锁定，或输入 0 返回。"
+        ;;
+    esac
+  done
+}
+
 capture_admin_account_password_behavior() {
   local current_state_label=""
   local answer=""
@@ -265,6 +291,9 @@ capture_admin_account_password_behavior() {
         if [[ "${_ADMIN_SUDO_MODE_SELECTED}" == "password" ]]; then
           ui_warn_message "当前组合无效" "sudo password 模式使用该账户密码，因此不能同时选择 no local password / lock password。"
           continue
+        fi
+        if ! admin_authorized_keys_ready_for_user "${ADMIN_USER}"; then
+          confirm_account_password_lock_risk || continue
         fi
         _ADMIN_ACCOUNT_PASSWORD_ACTION="lock"
         log info "Account password action: lock"

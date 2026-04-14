@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Module: 10_swap
-# Purpose: 通过显式交互选择是否启用 /swapfile。
+# Purpose: 通过显式交互选择 skip / 1G / 2G / 4G / custom。
 # Preconditions: root；Debian 12。
 # Steps:
 #   1. 展示当前 swap 状态
@@ -18,10 +18,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../lib/common.sh"
 # shellcheck source=../lib/ui.sh
 source "${SCRIPT_DIR}/../lib/ui.sh"
-
-swap_fstab_line() {
-  printf '%s\n' "/swapfile none swap sw 0 0"
-}
 
 swap_show_output() {
   swapon --show --noheadings --output NAME,SIZE,USED,PRIO 2>/dev/null || true
@@ -45,23 +41,6 @@ managed_swapfile_is_active() {
   swap_name_list | grep -Fxq "/swapfile"
 }
 
-swap_fstab_present() {
-  grep -Fqx "$(swap_fstab_line)" /etc/fstab 2>/dev/null
-}
-
-normalize_swap_size() {
-  local raw_value=""
-  raw_value="$(ui_trim_value "${1:-}")"
-
-  [[ -n "${raw_value}" ]] || return 1
-  if [[ "${raw_value}" =~ ^[0-9]+[GgMm]$ ]]; then
-    printf '%s\n' "${raw_value^^}"
-    return 0
-  fi
-
-  return 1
-}
-
 prompt_custom_swap_size() {
   local answer=""
   local normalized=""
@@ -76,13 +55,13 @@ prompt_custom_swap_size() {
       return 1
     fi
 
-    normalized="$(normalize_swap_size "${answer}" || true)"
+    normalized="$(normalize_swap_size_value "${answer}" || true)"
     if [[ -n "${normalized}" ]]; then
       printf '%s\n' "${normalized}"
       return 0
     fi
 
-    ui_warn_message "输入无效" "swap 大小只支持类似 512M、1G、2G、4G 的格式。"
+    ui_warn_message "输入无效" "$(swap_size_validation_error "${answer}")"
   done
 }
 
@@ -141,6 +120,7 @@ show_swap_terminal_summary() {
   local swapfile_state="absent"
   local swap_show_state=""
   local fstab_state="no"
+  local existing_swap_state="none"
   local summary=""
 
   if swapfile_exists; then
@@ -149,6 +129,11 @@ show_swap_terminal_summary() {
 
   swap_show_state="$(swap_show_output)"
   [[ -n "${swap_show_state}" ]] || swap_show_state="(none)"
+  if has_active_swap; then
+    existing_swap_state="active"
+  elif swapfile_exists; then
+    existing_swap_state="swapfile-present-but-inactive"
+  fi
 
   if swap_fstab_present; then
     fstab_state="yes"
@@ -158,6 +143,7 @@ show_swap_terminal_summary() {
 === Swap Summary ===
 Action: ${action_label}
 Selected size: ${selected_size:-<none>}
+Existing swap handling: ${existing_swap_state}
 /swapfile: ${swapfile_state}
 swapon --show:
 ${swap_show_state}
@@ -249,7 +235,7 @@ main() {
   fi
 
   if is_true "${PLAN_ONLY:-false}" || is_true "${DRY_RUN:-false}"; then
-    log info "[plan] swap choices: skip / 1G / 2G / 4G / custom"
+    log info "[plan] swap choices: skip / 1G / 2G / 4G / custom / 0"
     if has_active_swap; then
       record_swap_state "yes" "existing"
     else
