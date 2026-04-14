@@ -176,6 +176,13 @@ ui_prompt_input() {
   fi
   ui_print_raw "请输入："
   ui_read_line || return 1
+
+  # Apply default when user presses Enter without input
+  if [[ -z "$(ui_trim_value "${UI_LAST_INPUT}")" && -n "${default_value}" ]]; then
+    UI_LAST_INPUT="${default_value}"
+    export UI_LAST_INPUT
+  fi
+
   return 0
 }
 

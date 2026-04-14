@@ -51,6 +51,16 @@ load_config() {
   set_default_config
 
   local chosen_config="${CLI_CONFIG_FILE:-${CONFIG_FILE:-${PROJECT_ROOT}/config/default.conf}}"
+
+  # Resolve relative path to absolute so child processes can always find the config
+  if [[ -n "${chosen_config}" && "${chosen_config}" != /* ]]; then
+    if [[ -f "${chosen_config}" ]]; then
+      chosen_config="$(cd "$(dirname "${chosen_config}")" && pwd)/$(basename "${chosen_config}")"
+    elif [[ -f "${PROJECT_ROOT}/${chosen_config}" ]]; then
+      chosen_config="${PROJECT_ROOT}/${chosen_config}"
+    fi
+  fi
+
   CONFIG_FILE="${chosen_config}"
   if [[ -f "${CONFIG_FILE}" ]]; then
     # shellcheck disable=SC1090
@@ -59,7 +69,10 @@ load_config() {
 
   [[ -n "${CLI_PLAN_ONLY:-}" ]] && PLAN_ONLY="${CLI_PLAN_ONLY}"
   [[ -n "${CLI_DRY_RUN:-}" ]] && DRY_RUN="${CLI_DRY_RUN}"
-  [[ -n "${CLI_CONFIG_FILE:-}" ]] && CONFIG_FILE="${CLI_CONFIG_FILE}"
+  # Re-anchor CONFIG_FILE and CLI_CONFIG_FILE to the resolved absolute path
+  # so child processes sourcing load_config always use the same config file
+  CONFIG_FILE="${chosen_config}"
+  CLI_CONFIG_FILE="${chosen_config}"
   [[ -n "${RUNTIME_ADMIN_USER_OVERRIDE:-}" ]] && ADMIN_USER="${RUNTIME_ADMIN_USER_OVERRIDE}"
 
   MODULE_REGISTRY_FILE="${MODULE_REGISTRY_FILE:-${PROJECT_ROOT}/config/module-registry.tsv}"
@@ -69,7 +82,7 @@ load_config() {
 }
 
 export_config() {
-  export PROJECT_ROOT CONFIG_FILE MODULE_REGISTRY_FILE STATE_DIR LOG_DIR CHANGE_LOG_FILE
+  export PROJECT_ROOT CONFIG_FILE CLI_CONFIG_FILE CLI_PLAN_ONLY CLI_DRY_RUN MODULE_REGISTRY_FILE STATE_DIR LOG_DIR CHANGE_LOG_FILE
   export DEFAULT_ADMIN_USER RUNTIME_ADMIN_USER_OVERRIDE
   export TIMEZONE SSH_PORT CONFIRM_SSH_PORT_CHANGE
   export ADMIN_USER ADMIN_USER_SHELL ADMIN_USER_GROUPS AUTHORIZED_KEYS_FILE
