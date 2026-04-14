@@ -106,6 +106,7 @@ Recommended next steps:
 
 Reminder:
 ${SNAPSHOT_REMINDER}
+完整机内验证以 11_verify 为准，SSH 外部连通性仍需在新窗口手动验收。
 EOF
 )"
 

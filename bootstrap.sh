@@ -642,13 +642,50 @@ shortcut_target_path() {
 }
 
 render_shortcut_wrapper() {
-  cat <<EOF
+  cat <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT_ROOT="${PROJECT_ROOT}"
-cd "\${PROJECT_ROOT}"
-exec bash "${PROJECT_ROOT}/bootstrap.sh" menu "\$@"
+resolve_project_root() {
+  local current_user=""
+  local current_home=""
+  local candidate=""
+
+  current_user="$(id -un 2>/dev/null || true)"
+  current_home="${HOME:-}"
+
+  if [[ -z "${current_home}" && -n "${current_user}" ]]; then
+    current_home="$(getent passwd "${current_user}" | cut -d: -f6)"
+  fi
+
+  for candidate in \
+    "/opt/VPS_One-Click_Scripts" \
+    "${current_home:+${current_home}/VPS_One-Click_Scripts}" \
+    "/root/VPS_One-Click_Scripts"
+  do
+    [[ -n "${candidate}" ]] || continue
+    if [[ -d "${candidate}" && -x "${candidate}" && -f "${candidate}/bootstrap.sh" && -r "${candidate}/bootstrap.sh" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+PROJECT_ROOT="$(resolve_project_root || true)"
+if [[ -z "${PROJECT_ROOT}" ]]; then
+  printf '%s\n' "Unable to locate a readable VPS_One-Click_Scripts project directory." >&2
+  exit 1
+fi
+
+cd "${PROJECT_ROOT}"
+
+if [[ -f "config/local.conf" ]]; then
+  exec bash "bootstrap.sh" menu --config "config/local.conf" "$@"
+fi
+
+exec bash "bootstrap.sh" menu "$@"
 EOF
 }
 
@@ -664,6 +701,7 @@ install_shortcut() {
 
   if [[ -e "${target}" ]] && cmp -s "${temp_file}" "${target}"; then
     log info "Shortcut already installed: ${target}"
+    log info "Shortcut will prefer config/local.conf when present."
     rm -f "${temp_file}"
     return 0
   fi
@@ -708,6 +746,7 @@ install_shortcut() {
   rm -f "${temp_file}"
 
   log info "Shortcut installed: ${target}"
+  log info "Shortcut will prefer config/local.conf when present."
   log info "You can now run: j"
 }
 
