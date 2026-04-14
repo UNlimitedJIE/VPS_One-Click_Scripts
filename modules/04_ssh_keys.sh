@@ -104,7 +104,11 @@ EOF
   fi
 
   while true; do
-    if ! ui_prompt_input "粘贴 SSH 公钥" "请粘贴一整行 SSH 公钥（例如 ssh-ed25519 ... 或 ssh-rsa ...）。\n输入 0 取消：" ""; then
+    UI_LAST_INPUT=""
+    export UI_LAST_INPUT
+
+    ui_print_raw "\n粘贴 SSH 公钥\n现在正在等待你粘贴一整行 SSH 公钥，粘贴后按回车。\n例如：ssh-ed25519 ... 或 ssh-rsa ...\n输入 0 取消。\n请输入："
+    if ! ui_read_line; then
       return 1
     fi
 
@@ -114,7 +118,7 @@ EOF
         return 1
         ;;
       "")
-        ui_warn_message "输入为空" "请粘贴一整行 SSH 公钥，或输入 0 取消。"
+        ui_warn_message "未收到公钥" "请粘贴一整行 SSH 公钥，或输入 0 取消。"
         ;;
       *)
         if single_line_ssh_public_key_is_valid "${pasted_key}"; then

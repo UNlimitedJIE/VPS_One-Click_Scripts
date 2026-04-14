@@ -110,14 +110,14 @@ ui_show_text_block() {
     fi
   fi
 
-  ui_print_raw "\n${title}\n\n${body}\n\n"
+  ui_print_raw "\n${title}\n${body}\n"
 }
 
 ui_warn_message() {
   local title="$1"
   local body="$2"
 
-  ui_print_raw "\n[${title}]\n${body}\n\n"
+  ui_print_raw "\n[${title}] ${body}\n"
 }
 
 ui_confirm_text() {
@@ -131,7 +131,7 @@ ui_confirm_text() {
 
   ui_require_interactive || return 1
 
-  ui_print_raw "\n${title}\n\n${body}\n\n"
+  ui_print_raw "\n${title}\n${body}\n"
   ui_print_raw "继续执行请输入 yes："
   ui_read_line || return 1
   [[ "$(ui_trim_value "${UI_LAST_INPUT}")" == "yes" ]]
@@ -155,7 +155,7 @@ ui_confirm_with_back() {
 
   ui_require_interactive || return 1
 
-  ui_print_raw "\n${title}\n\n${body}\n\n"
+  ui_print_raw "\n${title}\n${body}\n"
   ui_print_raw "输入 yes 继续执行，输入 0 返回上一级菜单："
   ui_read_line || return 1
   [[ "$(ui_trim_value "${UI_LAST_INPUT}")" == "yes" ]]
@@ -171,7 +171,7 @@ ui_prompt_input() {
 
   ui_require_interactive || return 1
 
-  ui_print_raw "\n${title}\n\n${prompt}\n"
+  ui_print_raw "\n${title}\n${prompt}\n"
   if [[ -n "${default_value}" ]]; then
     ui_print_raw "默认值：${default_value}\n"
   fi
@@ -264,7 +264,7 @@ ui_read_secret() {
 
   ui_require_interactive || return 1
 
-  ui_print_raw "\n${title}\n\n${prompt}\n"
+  ui_print_raw "\n${title}\n${prompt}\n"
   ui_print_raw "请输入（输入不会显示）："
 
   local answer=""

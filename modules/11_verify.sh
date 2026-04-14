@@ -30,8 +30,117 @@ verify_pending() {
 }
 
 verify_fail() {
-  log_raw "ERROR" "[FAIL] $*"
+  log_raw "ERROR" "[ERROR] $*"
   failures=$((failures + 1))
+}
+
+verify_summary_swap_status() {
+  local swap_state=""
+  local swap_show=""
+
+  if has_active_swap; then
+    swap_show="$(swapon --show --noheadings --output NAME,SIZE,USED,PRIO 2>/dev/null || true)"
+    [[ -n "${swap_show}" ]] || swap_show="$(swapon --show --noheadings 2>/dev/null || true)"
+    [[ -n "${swap_show}" ]] || swap_show="active"
+    printf '%s\n' "active (${swap_show})"
+    return 0
+  fi
+
+  swap_state="$(get_state "SWAP_STATUS" || true)"
+  case "${swap_state}" in
+    skipped)
+      printf '%s\n' "not enabled (user skipped)"
+      ;;
+    existing-kept)
+      printf '%s\n' "existing swap kept unchanged"
+      ;;
+    created-*|replaced-*)
+      printf '%s\n' "expected active after ${swap_state}, but no active swap is currently visible"
+      ;;
+    manual-review)
+      printf '%s\n' "manual review required"
+      ;;
+    *)
+      if [[ -f /swapfile ]]; then
+        printf '%s\n' "/swapfile exists, but no active swap is currently enabled"
+      else
+        printf '%s\n' "not active"
+      fi
+      ;;
+  esac
+}
+
+print_verify_terminal_summary() {
+  local admin_status="not configured"
+  local auth_status="not ready"
+  local root_status="enabled"
+  local nftables_status="disabled"
+  local time_sync_status="disabled"
+  local auto_updates_status="disabled"
+  local fail2ban_status="not installed"
+  local swap_status=""
+  local summary=""
+
+  if [[ -n "${ADMIN_USER:-}" ]] && id -u "${ADMIN_USER}" >/dev/null 2>&1; then
+    admin_status="${ADMIN_USER}"
+  fi
+
+  if [[ -n "${ADMIN_USER:-}" ]] && admin_authorized_keys_ready_for_user "${ADMIN_USER}"; then
+    auth_status="ready ($(admin_authorized_keys_count_for_user "${ADMIN_USER}") key(s))"
+  fi
+
+  if root_ssh_login_disabled; then
+    root_status="disabled"
+  elif [[ "$(get_state "ADMIN_LOGIN_CUTOVER" || true)" == "yes" ]]; then
+    root_status="still allowed after cutover"
+  else
+    root_status="still allowed (cutover pending)"
+  fi
+
+  if service_enabled "nftables" && service_active "nftables"; then
+    nftables_status="enabled and active"
+  fi
+
+  if service_enabled "systemd-timesyncd" && service_active "systemd-timesyncd"; then
+    time_sync_status="enabled and active"
+  fi
+
+  if service_exists "unattended-upgrades" && service_enabled "unattended-upgrades"; then
+    auto_updates_status="enabled"
+    if service_active "unattended-upgrades"; then
+      auto_updates_status="enabled and active"
+    fi
+  fi
+
+  if service_exists "fail2ban"; then
+    if service_enabled "fail2ban" && service_active "fail2ban"; then
+      fail2ban_status="enabled and active"
+    else
+      fail2ban_status="installed but not fully active"
+    fi
+  fi
+
+  swap_status="$(verify_summary_swap_status)"
+
+  summary="$(cat <<EOF
+=== Verification Summary ===
+Errors: ${failures}
+Warnings: ${warnings}
+Pending: ${pending}
+Admin user: ${admin_status}
+Effective SSH port: $(effective_ssh_port_for_changes)
+Root remote login: ${root_status}
+authorized_keys: ${auth_status}
+nftables: ${nftables_status}
+time sync: ${time_sync_status}
+auto updates: ${auto_updates_status}
+fail2ban: ${fail2ban_status}
+swap: ${swap_status}
+Manual note: SSH 外部连通性仍需在新窗口手动验收。
+EOF
+)"
+
+  printf '\n%s\n' "${summary}"
 }
 
 shortcut_target_path() {
@@ -474,6 +583,8 @@ main() {
   module_banner "11_verify" "初始化后的验证检查"
   require_root
 
+  printf '\n=== Verification Checks ===\n'
+
   local warnings=0
   local failures=0
   local pending=0
@@ -542,10 +653,16 @@ main() {
     fi
   fi
 
+  local swap_state=""
+  swap_state="$(get_state "SWAP_STATUS" || true)"
   if has_active_swap; then
     verify_ok "swap is active"
+  elif [[ "${swap_state}" == "skipped" ]]; then
+    verify_pending "swap is not active (user skipped swap setup)"
+  elif [[ -f /swapfile ]]; then
+    verify_warn "/swapfile exists, but no active swap is enabled"
   else
-    verify_warn "swap is not active"
+    verify_pending "swap is not active"
   fi
 
   verify_shortcut_wrapper
@@ -557,6 +674,8 @@ main() {
   set_state "VERIFY_WARNINGS" "${warnings}"
   set_state "VERIFY_FAILURES" "${failures}"
   set_state "VERIFY_PENDING" "${pending}"
+
+  print_verify_terminal_summary
 
   if (( failures > 0 )); then
     log warn "Verification finished with ${failures} failure(s), ${warnings} warning(s), and ${pending} pending item(s)."

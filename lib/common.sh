@@ -13,6 +13,125 @@ source "${COMMON_DIR}/validate.sh"
 # shellcheck source=lib/apt.sh
 source "${COMMON_DIR}/apt.sh"
 
+shared_state_dir_path() {
+  printf '%s/state\n' "${PROJECT_ROOT}"
+}
+
+shared_log_dir_path() {
+  printf '%s/logs\n' "${PROJECT_ROOT}"
+}
+
+shared_change_log_file_path() {
+  printf '%s/change-log.tsv\n' "$(shared_state_dir_path)"
+}
+
+shared_runtime_state_file_path() {
+  printf '%s/runtime.state\n' "$(shared_state_dir_path)"
+}
+
+private_runtime_base_dir() {
+  local state_home="${XDG_STATE_HOME:-}"
+  local current_user=""
+  local current_home="${HOME:-}"
+
+  if [[ -n "${state_home}" ]]; then
+    printf '%s/vps-bootstrap\n' "${state_home}"
+    return 0
+  fi
+
+  if [[ -z "${current_home}" ]]; then
+    current_user="$(id -un 2>/dev/null || true)"
+    if [[ -n "${current_user}" ]]; then
+      current_home="$(getent passwd "${current_user}" | cut -d: -f6)"
+    fi
+  fi
+
+  if [[ -n "${current_home}" ]]; then
+    printf '%s/.local/state/vps-bootstrap\n' "${current_home}"
+    return 0
+  fi
+
+  printf '/tmp/vps-bootstrap\n'
+}
+
+private_state_dir_path() {
+  printf '%s\n' "$(private_runtime_base_dir)"
+}
+
+private_log_dir_path() {
+  printf '%s/logs\n' "$(private_runtime_base_dir)"
+}
+
+private_change_log_file_path() {
+  printf '%s/change-log.tsv\n' "$(private_state_dir_path)"
+}
+
+runtime_storage_mode_for_current_user() {
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    printf '%s\n' "shared"
+  else
+    printf '%s\n' "private"
+  fi
+}
+
+normalize_runtime_storage_paths() {
+  local shared_state_dir=""
+  local shared_log_dir=""
+  local shared_change_log=""
+  local private_state_dir=""
+  local private_log_dir=""
+  local private_change_log=""
+  local mode=""
+
+  shared_state_dir="$(shared_state_dir_path)"
+  shared_log_dir="$(shared_log_dir_path)"
+  shared_change_log="$(shared_change_log_file_path)"
+  private_state_dir="$(private_state_dir_path)"
+  private_log_dir="$(private_log_dir_path)"
+  private_change_log="$(private_change_log_file_path)"
+  mode="$(runtime_storage_mode_for_current_user)"
+
+  SHARED_STATE_DIR="${shared_state_dir}"
+  SHARED_LOG_DIR="${shared_log_dir}"
+
+  if [[ "${mode}" == "private" ]]; then
+    if [[ -z "${STATE_DIR:-}" || "${STATE_DIR}" == "${shared_state_dir}" ]]; then
+      STATE_DIR="${private_state_dir}"
+    fi
+    if [[ -z "${LOG_DIR:-}" || "${LOG_DIR}" == "${shared_log_dir}" ]]; then
+      LOG_DIR="${private_log_dir}"
+    fi
+    if [[ -z "${CHANGE_LOG_FILE:-}" || "${CHANGE_LOG_FILE}" == "${shared_change_log}" ]]; then
+      CHANGE_LOG_FILE="${private_change_log}"
+    fi
+  else
+    STATE_DIR="${STATE_DIR:-${shared_state_dir}}"
+    LOG_DIR="${LOG_DIR:-${shared_log_dir}}"
+    CHANGE_LOG_FILE="${CHANGE_LOG_FILE:-${shared_change_log}}"
+  fi
+
+  RUNTIME_STORAGE_MODE="${mode}"
+}
+
+ensure_runtime_storage_ready() {
+  local target_state_dir="${STATE_DIR:-}"
+  local target_log_dir="${LOG_DIR:-}"
+
+  mkdir -p "${target_state_dir}" "${target_state_dir}/reports" "${target_state_dir}/tmp" "${target_log_dir}" 2>/dev/null && return 0
+
+  if [[ "${RUNTIME_STORAGE_MODE:-}" == "private" ]]; then
+    return 1
+  fi
+
+  if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+    STATE_DIR="$(private_state_dir_path)"
+    LOG_DIR="$(private_log_dir_path)"
+    CHANGE_LOG_FILE="$(private_change_log_file_path)"
+    RUNTIME_STORAGE_MODE="private"
+    mkdir -p "${STATE_DIR}" "${STATE_DIR}/reports" "${STATE_DIR}/tmp" "${LOG_DIR}" 2>/dev/null || true
+  fi
+}
+
 set_default_config() {
   DEFAULT_ADMIN_USER="${DEFAULT_ADMIN_USER:-ops}"
   TIMEZONE="${TIMEZONE:-UTC}"
@@ -42,9 +161,9 @@ set_default_config() {
   CLEANUP_APT_CACHE="${CLEANUP_APT_CACHE:-true}"
   SAFE_TUNING_PROFILE="${SAFE_TUNING_PROFILE:-none}"
   MODULE_REGISTRY_FILE="${MODULE_REGISTRY_FILE:-${PROJECT_ROOT}/config/module-registry.tsv}"
-  STATE_DIR="${STATE_DIR:-${PROJECT_ROOT}/state}"
-  LOG_DIR="${LOG_DIR:-${PROJECT_ROOT}/logs}"
-  CHANGE_LOG_FILE="${CHANGE_LOG_FILE:-${STATE_DIR}/change-log.tsv}"
+  STATE_DIR="${STATE_DIR:-$(shared_state_dir_path)}"
+  LOG_DIR="${LOG_DIR:-$(shared_log_dir_path)}"
+  CHANGE_LOG_FILE="${CHANGE_LOG_FILE:-$(shared_change_log_file_path)}"
   SNAPSHOT_REMINDER="${SNAPSHOT_REMINDER:-初始化通过后，请先验证新 SSH 登录，再在云厂商控制台创建快照/备份。}"
 }
 
@@ -135,15 +254,14 @@ load_config() {
   [[ -n "${RUNTIME_ADMIN_USER_OVERRIDE:-}" ]] && ADMIN_USER="${RUNTIME_ADMIN_USER_OVERRIDE}"
 
   MODULE_REGISTRY_FILE="${MODULE_REGISTRY_FILE:-${PROJECT_ROOT}/config/module-registry.tsv}"
-  STATE_DIR="${STATE_DIR:-${PROJECT_ROOT}/state}"
-  LOG_DIR="${LOG_DIR:-${PROJECT_ROOT}/logs}"
-  CHANGE_LOG_FILE="${CHANGE_LOG_FILE:-${STATE_DIR}/change-log.tsv}"
+  normalize_runtime_storage_paths
 }
 
 export_config() {
   export PROJECT_ROOT CONFIG_FILE CLI_CONFIG_FILE CLI_PLAN_ONLY CLI_DRY_RUN MODULE_REGISTRY_FILE STATE_DIR LOG_DIR CHANGE_LOG_FILE
   export DEFAULT_ADMIN_USER RUNTIME_ADMIN_USER_OVERRIDE
   export ACTIVE_CONFIG_CHAIN
+  export SHARED_STATE_DIR SHARED_LOG_DIR RUNTIME_STORAGE_MODE
   export TIMEZONE SSH_PORT CONFIRM_SSH_PORT_CHANGE
   export ADMIN_USER ADMIN_USER_SHELL ADMIN_USER_GROUPS ADMIN_SUDO_MODE_DEFAULT AUTHORIZED_KEYS_FILE
   export DISABLE_PASSWORD_LOGIN DISABLE_ROOT_SSH_PASSWORD
@@ -154,7 +272,7 @@ export_config() {
 }
 
 init_runtime() {
-  mkdir -p "${STATE_DIR}" "${STATE_DIR}/reports" "${STATE_DIR}/tmp" "${LOG_DIR}"
+  ensure_runtime_storage_ready
 
   RUN_ID="${RUN_ID:-$(date '+%Y%m%d-%H%M%S')}"
   LOG_FILE="${LOG_FILE:-${LOG_DIR}/${RUN_ID}-${RUN_MODE:-manual}.log}"
@@ -392,7 +510,7 @@ upsert_config_assignment() {
 
 cleanup_ephemeral_state() {
   if [[ "${STATE_FILE_IS_EPHEMERAL:-false}" == "true" && -n "${STATE_FILE:-}" && -f "${STATE_FILE}" ]]; then
-    rm -f "${STATE_FILE}"
+    rm -f "${STATE_FILE}" 2>/dev/null || true
   fi
 }
 
@@ -554,16 +672,79 @@ set_state() {
   local tmp_file=""
   tmp_file="$(mktemp)"
 
-  touch "${STATE_FILE}"
-  grep -v "^${key}=" "${STATE_FILE}" >"${tmp_file}" || true
+  [[ -n "${STATE_FILE:-}" ]] || {
+    rm -f "${tmp_file}"
+    return 0
+  }
+
+  mkdir -p "$(dirname "${STATE_FILE}")" 2>/dev/null || true
+  if ! touch "${STATE_FILE}" 2>/dev/null; then
+    rm -f "${tmp_file}"
+    return 0
+  fi
+
+  grep -v "^${key}=" "${STATE_FILE}" 2>/dev/null >"${tmp_file}" || true
   printf '%s=%s\n' "${key}" "${value}" >>"${tmp_file}"
-  mv "${tmp_file}" "${STATE_FILE}"
+  mv "${tmp_file}" "${STATE_FILE}" 2>/dev/null || {
+    rm -f "${tmp_file}"
+    return 0
+  }
+
+  if [[ "${STATE_FILE}" == "$(shared_runtime_state_file_path)" || "${STATE_FILE}" == "$(shared_state_dir_path)"/* ]]; then
+    chmod 0644 "${STATE_FILE}" 2>/dev/null || true
+  fi
+}
+
+state_file_candidates() {
+  local shared_state_file=""
+  local current_state_file="${STATE_FILE:-}"
+
+  if [[ -n "${current_state_file}" ]]; then
+    printf '%s\n' "${current_state_file}"
+  fi
+
+  shared_state_file="$(shared_runtime_state_file_path)"
+  if [[ -n "${shared_state_file}" && "${shared_state_file}" != "${current_state_file}" ]]; then
+    printf '%s\n' "${shared_state_file}"
+  fi
+}
+
+state_value_from_file() {
+  local file="$1"
+  local key="$2"
+
+  [[ -r "${file}" ]] || return 1
+
+  awk -v key="${key}" '
+    index($0, key "=") == 1 {
+      value = substr($0, length(key) + 2)
+      found = 1
+    }
+    END {
+      if (found) {
+        print value
+      } else {
+        exit 1
+      }
+    }
+  ' "${file}" 2>/dev/null
 }
 
 get_state() {
   local key="$1"
-  [[ -f "${STATE_FILE}" ]] || return 1
-  grep "^${key}=" "${STATE_FILE}" | tail -n1 | cut -d= -f2-
+  local candidate=""
+  local value=""
+
+  while IFS= read -r candidate; do
+    [[ -n "${candidate}" ]] || continue
+    value="$(state_value_from_file "${candidate}" "${key}" || true)"
+    if [[ -n "${value}" ]]; then
+      printf '%s\n' "${value}"
+      return 0
+    fi
+  done < <(state_file_candidates)
+
+  return 1
 }
 
 module_completion_state_found() {
@@ -743,24 +924,17 @@ fail2ban_prerequisite_conditions_satisfied() {
 }
 
 swap_prerequisite_conditions_satisfied() {
-  case "${ENABLE_SWAP:-auto}" in
-    false|FALSE|no|NO|off|OFF|0)
-      return 0
-      ;;
-  esac
-
   if has_active_swap; then
     return 0
   fi
 
-  case "${ENABLE_SWAP:-auto}" in
-    auto|AUTO)
-      (( "$(memory_mb)" >= SWAP_AUTO_THRESHOLD_MB ))
-      ;;
-    *)
-      return 1
+  case "$(get_state "SWAP_STATUS" || true)" in
+    skipped|disabled|existing|existing-kept|created-*|replaced-*|manual-review)
+      return 0
       ;;
   esac
+
+  [[ ! -e /swapfile ]]
 }
 
 verify_prerequisite_conditions_satisfied() {

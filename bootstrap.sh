@@ -111,6 +111,11 @@ ensure_runtime_initialized() {
   fi
 
   init_runtime
+  if [[ "${RUNTIME_STORAGE_MODE:-shared}" == "private" ]]; then
+    log info "Runtime storage mode: private (state=${STATE_FILE}, log=${LOG_FILE})"
+  else
+    log info "Runtime storage mode: shared (state=${STATE_FILE}, log=${LOG_FILE})"
+  fi
   trap cleanup_ephemeral_state EXIT
   RUNTIME_INITIALIZED="true"
 }

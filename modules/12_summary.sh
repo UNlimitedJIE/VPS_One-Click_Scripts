@@ -15,6 +15,73 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
 source "${SCRIPT_DIR}/../lib/common.sh"
 
+summary_service_state() {
+  local unit="${1:-}"
+  local absent_label="${2:-not installed}"
+
+  if ! service_exists "${unit}"; then
+    printf '%s\n' "${absent_label}"
+    return 0
+  fi
+
+  if service_enabled "${unit}" && service_active "${unit}"; then
+    printf '%s\n' "enabled and active"
+  elif service_enabled "${unit}"; then
+    printf '%s\n' "enabled"
+  else
+    printf '%s\n' "not enabled"
+  fi
+}
+
+summary_root_login_state() {
+  if root_ssh_login_disabled; then
+    printf '%s\n' "disabled"
+  elif [[ "$(get_state "ADMIN_LOGIN_CUTOVER" || true)" == "yes" ]]; then
+    printf '%s\n' "still allowed after cutover"
+  else
+    printf '%s\n' "still allowed (cutover pending)"
+  fi
+}
+
+summary_authorized_keys_state() {
+  if [[ -n "${ADMIN_USER:-}" ]] && admin_authorized_keys_ready_for_user "${ADMIN_USER}"; then
+    printf '%s\n' "ready ($(admin_authorized_keys_count_for_user "${ADMIN_USER}") key(s))"
+  else
+    printf '%s\n' "not ready"
+  fi
+}
+
+summary_swap_state() {
+  local swap_state=""
+  local swap_show=""
+
+  if has_active_swap; then
+    swap_show="$(swapon --show --noheadings --output NAME,SIZE,USED,PRIO 2>/dev/null || true)"
+    [[ -n "${swap_show}" ]] || swap_show="$(swapon --show --noheadings 2>/dev/null || true)"
+    printf '%s\n' "active (${swap_show})"
+    return 0
+  fi
+
+  swap_state="$(get_state "SWAP_STATUS" || true)"
+  case "${swap_state}" in
+    skipped)
+      printf '%s\n' "not enabled (user skipped)"
+      ;;
+    existing-kept)
+      printf '%s\n' "existing swap kept unchanged"
+      ;;
+    created-*|replaced-*)
+      printf '%s\n' "expected active after ${swap_state}, but no active swap is currently visible"
+      ;;
+    manual-review)
+      printf '%s\n' "manual review required"
+      ;;
+    *)
+      printf '%s\n' "not active"
+      ;;
+  esac
+}
+
 main() {
   load_config
   init_runtime
@@ -28,48 +95,33 @@ main() {
 
   local admin_state auth_state root_ssh_state nft_state ts_state f2b_state au_state swap_state
   local requested_ssh_port effective_ssh_port port_confirm_state
-  admin_state="no"
-  auth_state="no"
+  local next_login_target=""
+  admin_state="not configured"
+  auth_state="not ready"
   root_ssh_state="unknown"
-  nft_state="no"
-  ts_state="no"
-  f2b_state="no"
-  au_state="no"
-  swap_state="disabled"
+  nft_state="disabled"
+  ts_state="disabled"
+  f2b_state="not installed"
+  au_state="disabled"
+  swap_state="not active"
 
   if [[ -n "${ADMIN_USER}" ]] && id -u "${ADMIN_USER}" >/dev/null 2>&1; then
-    admin_state="yes (${ADMIN_USER})"
+    admin_state="${ADMIN_USER}"
   fi
 
-  if [[ -n "${ADMIN_USER}" ]] && authorized_keys_present_for_user "${ADMIN_USER}"; then
-    auth_state="yes"
-  fi
-
-  if root_ssh_login_disabled; then
-    root_ssh_state="disabled"
+  if [[ -n "${ADMIN_USER:-}" ]]; then
+    next_login_target="${ADMIN_USER}"
   else
-    root_ssh_state="enabled"
+    next_login_target="<先完成管理用户配置>"
   fi
 
-  if service_enabled "nftables" && service_active "nftables"; then
-    nft_state="yes"
-  fi
-
-  if service_enabled "systemd-timesyncd" && service_active "systemd-timesyncd"; then
-    ts_state="yes"
-  fi
-
-  if service_exists "fail2ban" && service_enabled "fail2ban" && service_active "fail2ban"; then
-    f2b_state="yes"
-  fi
-
-  if service_exists "unattended-upgrades" && service_enabled "unattended-upgrades"; then
-    au_state="yes"
-  fi
-
-  if has_active_swap; then
-    swap_state="$(swapon --show --noheadings | awk '{print $1 " (" $3 ")"}' | paste -sd ',' -)"
-  fi
+  auth_state="$(summary_authorized_keys_state)"
+  root_ssh_state="$(summary_root_login_state)"
+  nft_state="$(summary_service_state "nftables" "not installed")"
+  ts_state="$(summary_service_state "systemd-timesyncd" "not installed")"
+  f2b_state="$(summary_service_state "fail2ban" "not installed")"
+  au_state="$(summary_service_state "unattended-upgrades" "not installed")"
+  swap_state="$(summary_swap_state)"
 
   requested_ssh_port="${SSH_PORT}"
   effective_ssh_port="$(effective_ssh_port_for_changes)"
@@ -81,39 +133,38 @@ main() {
 
   local summary
   summary="$(cat <<EOF
-=== Debian 12 VPS Init Summary ===
+=== VPS Summary ===
 System version: $(pretty_os_name)
 Hostname: $(hostnamectl --static 2>/dev/null || hostname)
-Requested SSH port: ${requested_ssh_port}
+Admin user: ${admin_state}
 Effective SSH port: ${effective_ssh_port}
-SSH port change confirmation: ${port_confirm_state}
-Admin user detected: ${admin_state}
-authorized_keys detected: ${auth_state}
-Root remote SSH login: ${root_ssh_state}
-nftables enabled: ${nft_state}
-timesyncd enabled: ${ts_state}
-fail2ban enabled: ${f2b_state}
-unattended-upgrades enabled: ${au_state}
-Swap status: ${swap_state}
+SSH port confirmation: ${port_confirm_state}
+Root remote login: ${root_ssh_state}
+authorized_keys: ${auth_state}
+nftables: ${nft_state}
+time sync: ${ts_state}
+auto updates: ${au_state}
+fail2ban: ${f2b_state}
+swap: ${swap_state}
 
-Recommended next steps:
-1. Keep the current root session open and test a fresh admin-user login on port ${effective_ssh_port}.
-2. Confirm cloud firewall/security-group matches the SSH port you actually want to use.
-3. Review /etc/ssh/sshd_config.d/99-vps-bootstrap.conf, /etc/ssh/sshd_config.d/999-vps-root-login-cutover.conf and /etc/nftables.conf.
-4. If you plan to move away from port 22, set CONFIRM_SSH_PORT_CHANGE="true" only after external access is verified.
-5. After verification, create a provider snapshot or backup.
-6. Add business ports later through dedicated role/module scripts, not by editing core baseline blindly.
+Next steps:
+1. 保持当前 root 会话不断开，并在新窗口测试 ${next_login_target} 的 SSH 登录。
+2. 下一次 SSH 连接请使用端口 ${effective_ssh_port}。
+3. 确认云厂商安全组/外部防火墙与当前 SSH 端口一致。
+4. 完整机内验证以 11_verify 为准，SSH 外部连通性仍需在新窗口手动验收。
+5. 验证完成后再创建快照或备份。
 
 Reminder:
 ${SNAPSHOT_REMINDER}
-完整机内验证以 11_verify 为准，SSH 外部连通性仍需在新窗口手动验收。
 EOF
 )"
 
-  log info "${summary}"
+  printf '\n%s\n' "${summary}"
+  log info "Summary printed to terminal."
 
   if is_false "${PLAN_ONLY}" && is_false "${DRY_RUN}"; then
     printf '%s\n' "${summary}" >"${STATE_DIR}/init-summary.txt"
+    log info "Summary file updated: ${STATE_DIR}/init-summary.txt"
   fi
 
   set_state "SUMMARY_WRITTEN" "yes"

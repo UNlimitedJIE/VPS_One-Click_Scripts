@@ -9,7 +9,7 @@ set -euo pipefail
 #   2. 不存在则创建用户
 #   3. 确保 shell、补充组、home 目录正确
 #   4. 交互选择 sudo 模式：
-#      - 直接回车 = 免密 sudo（写入 sudoers drop-in，锁定密码）
+#      - 直接回车 = 免密 sudo（写入 sudoers drop-in，可选是否锁定本地密码）
 #      - 输入密码 = sudo 需要该密码（设置本地密码，移除 NOPASSWD drop-in）
 #   5. 非交互 / plan / dry-run 使用 ADMIN_SUDO_MODE_DEFAULT
 # Idempotency:
@@ -25,6 +25,7 @@ source "${SCRIPT_DIR}/../lib/ui.sh"
 
 _ADMIN_SUDO_PASSWORD="${_ADMIN_SUDO_PASSWORD:-}"
 _ADMIN_SUDO_MODE_SELECTED="${_ADMIN_SUDO_MODE_SELECTED:-}"
+_ADMIN_LOCK_LOCAL_PASSWORD="${_ADMIN_LOCK_LOCAL_PASSWORD:-false}"
 
 ensure_groups() {
   local groups_csv="$1"
@@ -64,6 +65,7 @@ capture_admin_sudo_mode() {
 
   _ADMIN_SUDO_PASSWORD=""
   _ADMIN_SUDO_MODE_SELECTED=""
+  _ADMIN_LOCK_LOCAL_PASSWORD="false"
 
   if is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
     _ADMIN_SUDO_MODE_SELECTED="${default_mode}"
@@ -87,6 +89,7 @@ capture_admin_sudo_mode() {
       "")
         _ADMIN_SUDO_MODE_SELECTED="nopasswd"
         log info "Selected sudo mode: ${_ADMIN_SUDO_MODE_SELECTED}"
+        capture_nopasswd_local_password_policy
         return 0
         ;;
       p|P)
@@ -131,6 +134,41 @@ capture_admin_sudo_mode() {
   done
 }
 
+capture_nopasswd_local_password_policy() {
+  local answer=""
+
+  if is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
+    log info "[plan] nopasswd sudo will keep the local password unchanged by default."
+    _ADMIN_LOCK_LOCAL_PASSWORD="false"
+    return 0
+  fi
+
+  while true; do
+    if ! ui_prompt_input \
+      "本地密码处理" \
+      "已选择 nopasswd sudo。\n直接回车或输入 no = 不锁定本地密码\n输入 yes = 同时锁定本地密码\n这不会影响 SSH 公钥登录"; then
+      die "无法确认 nopasswd 模式下的本地密码策略，请在交互式终端中执行。"
+    fi
+
+    answer="$(ui_trim_value "${UI_LAST_INPUT}")"
+    case "${answer}" in
+      ""|no|NO|n|N)
+        _ADMIN_LOCK_LOCAL_PASSWORD="false"
+        log info "Local password policy for ${ADMIN_USER}: keep unchanged"
+        return 0
+        ;;
+      yes|YES|y|Y)
+        _ADMIN_LOCK_LOCAL_PASSWORD="true"
+        log info "Local password policy for ${ADMIN_USER}: lock after enabling nopasswd sudo"
+        return 0
+        ;;
+      *)
+        ui_warn_message "输入无效" "直接回车或输入 no 表示保留本地密码；输入 yes 表示锁定本地密码。"
+        ;;
+    esac
+  done
+}
+
 require_admin_sudo_password() {
   if [[ -z "${_ADMIN_SUDO_PASSWORD}" ]]; then
     die "sudo 模式为 password，但当前没有可用的本地密码输入。"
@@ -149,7 +187,12 @@ apply_nopasswd_sudo() {
     log info "[plan] content: ${content}"
     log info "[plan] set owner/group root:root and mode 0440 on ${dropin_path}"
     log info "[plan] visudo -c -f ${dropin_path}"
-    log info "[plan] passwd -l ${ADMIN_USER}"
+    if is_true "${_ADMIN_LOCK_LOCAL_PASSWORD}"; then
+      log info "[plan] passwd -l ${ADMIN_USER}"
+    else
+      log info "[plan] keep local password unchanged for ${ADMIN_USER}"
+    fi
+    log info "[plan] verify sudo -n true for ${ADMIN_USER}"
     return 0
   fi
 
@@ -165,8 +208,14 @@ apply_nopasswd_sudo() {
   fi
   log info "visudo validation passed: ${dropin_path}"
 
-  passwd -l "${ADMIN_USER}" >/dev/null
-  log info "Local password locked for ${ADMIN_USER}."
+  if is_true "${_ADMIN_LOCK_LOCAL_PASSWORD}"; then
+    passwd -l "${ADMIN_USER}" >/dev/null
+    log info "Local password locked for ${ADMIN_USER}."
+  else
+    log info "Local password unchanged for ${ADMIN_USER}."
+  fi
+
+  verify_nopasswd_sudo_runtime
 }
 
 apply_sudo_mode() {
@@ -191,6 +240,8 @@ apply_sudo_mode() {
 
 apply_password_sudo() {
   local dropin_path=""
+  local sudo_output=""
+  local sudo_status=0
   dropin_path="$(sudoers_dropin_path)"
 
   if is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
@@ -209,6 +260,37 @@ apply_password_sudo() {
     rm -f "${dropin_path}"
     log info "Removed sudoers drop-in: ${dropin_path}"
   fi
+
+  sudo_output="$(
+    env LC_ALL=C LANG=C sudo -u "${ADMIN_USER}" sudo -n true 2>&1
+  )" || sudo_status=$?
+
+  if [[ "${sudo_status}" -eq 0 ]]; then
+    die "Expected password-required sudo for ${ADMIN_USER}, but sudo -n succeeded unexpectedly."
+  fi
+
+  if [[ "${sudo_output}" == *"password is required"* ]]; then
+    log info "Verified password-required sudo for ${ADMIN_USER}."
+    return 0
+  fi
+
+  die "Expected password-required sudo for ${ADMIN_USER}, but got: ${sudo_output:-<no output>}"
+}
+
+verify_nopasswd_sudo_runtime() {
+  local sudo_output=""
+  local sudo_status=0
+
+  sudo_output="$(
+    env LC_ALL=C LANG=C sudo -u "${ADMIN_USER}" sudo -n true 2>&1
+  )" || sudo_status=$?
+
+  if [[ "${sudo_status}" -eq 0 ]]; then
+    log info "Verified nopasswd sudo for ${ADMIN_USER}."
+    return 0
+  fi
+
+  die "Configured nopasswd sudo for ${ADMIN_USER}, but runtime verification failed: ${sudo_output:-<no output>}"
 }
 
 main() {

@@ -11,11 +11,11 @@ log_raw() {
   local line
   line="$(timestamp) [${level}] ${message}"
 
+  printf '%s\n' "$line"
+
   if [[ -n "${LOG_FILE:-}" ]]; then
-    mkdir -p "$(dirname "${LOG_FILE}")"
-    printf '%s\n' "$line" | tee -a "${LOG_FILE}"
-  else
-    printf '%s\n' "$line"
+    mkdir -p "$(dirname "${LOG_FILE}")" 2>/dev/null || true
+    printf '%s\n' "$line" >>"${LOG_FILE}" 2>/dev/null || true
   fi
 }
 
