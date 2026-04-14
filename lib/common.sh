@@ -270,6 +270,31 @@ apply_managed_file() {
   log info "Managed file updated: ${target}"
 }
 
+replace_file_with_tmp_if_changed() {
+  local target="$1"
+  local tmp_file="$2"
+  local backup_existing="${3:-false}"
+
+  if [[ -f "${target}" ]] && cmp -s "${tmp_file}" "${target}"; then
+    rm -f "${tmp_file}"
+    log info "No change required: ${target}"
+    return 0
+  fi
+
+  if is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
+    log info "[plan] update file: ${target}"
+    rm -f "${tmp_file}"
+    return 0
+  fi
+
+  if [[ -f "${target}" && "${backup_existing}" == "true" ]]; then
+    backup_file "${target}"
+  fi
+
+  mv "${tmp_file}" "${target}"
+  log info "Managed file updated: ${target}"
+}
+
 ensure_directory() {
   local path="$1"
   local mode="${2:-0755}"
@@ -507,13 +532,212 @@ effective_ssh_port_for_changes() {
   printf '%s\n' "${SSH_PORT}"
 }
 
+current_permit_root_login_mode() {
+  local mode=""
+  if command_exists sshd; then
+    mode="$(sshd -T 2>/dev/null | awk '/^permitrootlogin / {print $2; exit}' || true)"
+  fi
+  printf '%s\n' "${mode:-unknown}"
+}
+
+root_ssh_login_disabled() {
+  [[ "$(current_permit_root_login_mode)" == "no" ]]
+}
+
 warn_ssh_port_change_not_confirmed() {
   local current_port=""
   current_port="$(current_ssh_port 2>/dev/null || true)"
   current_port="${current_port:-22}"
   log warn "Requested SSH_PORT=${SSH_PORT}, but CONFIRM_SSH_PORT_CHANGE is not enabled."
   log warn "For safety, SSH hardening and nftables will keep using the current port ${current_port}."
-  log warn "After confirming cloud firewall/security-group and external access are ready, set CONFIRM_SSH_PORT_CHANGE=\"true\" and rerun step 6 and step 7."
+  log warn "After confirming cloud firewall/security-group and external access are ready, set CONFIRM_SSH_PORT_CHANGE=\"true\" and rerun the merged admin-access stage plus the nftables step."
+}
+
+nftables_config_path() {
+  printf '/etc/nftables.conf\n'
+}
+
+nftables_extra_ports_begin_marker() {
+  printf '# BEGIN VPS EXTRA TCP PORTS\n'
+}
+
+nftables_extra_ports_end_marker() {
+  printf '# END VPS EXTRA TCP PORTS\n'
+}
+
+normalize_numeric_port_list() {
+  printf '%s\n' "$@" | awk '
+    /^[0-9]+$/ {
+      if (!seen[$0]++) {
+        print $0
+      }
+    }
+  ' | sort -n
+}
+
+render_nftables_extra_port_lines() {
+  local port=""
+  for port in "$@"; do
+    printf '    tcp dport %s accept comment "VPS extra port"\n' "${port}"
+  done
+}
+
+nftables_list_managed_extra_tcp_ports() {
+  local file=""
+  local begin_marker=""
+  local end_marker=""
+
+  file="$(nftables_config_path)"
+  begin_marker="$(nftables_extra_ports_begin_marker)"
+  end_marker="$(nftables_extra_ports_end_marker)"
+
+  [[ -f "${file}" ]] || return 0
+
+  awk -v begin_marker="${begin_marker}" -v end_marker="${end_marker}" '
+    index($0, begin_marker) { in_block = 1; next }
+    index($0, end_marker) { in_block = 0; next }
+    in_block {
+      if (match($0, /tcp dport ([0-9]+)/, matched)) {
+        print matched[1]
+      }
+    }
+  ' "${file}" | sort -n | uniq
+}
+
+nftables_ensure_extra_ports_block() {
+  local file=""
+  local begin_marker=""
+  local end_marker=""
+  local tmp_file=""
+
+  file="$(nftables_config_path)"
+  begin_marker="$(nftables_extra_ports_begin_marker)"
+  end_marker="$(nftables_extra_ports_end_marker)"
+
+  [[ -f "${file}" ]] || die "nftables 配置不存在：${file}。请先完成初始化中的 nftables 步骤。"
+
+  if grep -Fq "${begin_marker}" "${file}" && grep -Fq "${end_marker}" "${file}"; then
+    return 0
+  fi
+
+  tmp_file="$(mktemp)"
+  awk -v begin_marker="${begin_marker}" -v end_marker="${end_marker}" '
+    /chain input[[:space:]]*\{/ { in_input = 1 }
+    in_input && /^[[:space:]]*}$/ && !inserted {
+      print "    " begin_marker
+      print "    " end_marker
+      inserted = 1
+      in_input = 0
+    }
+    { print }
+    END {
+      if (!inserted) {
+        exit 1
+      }
+    }
+  ' "${file}" >"${tmp_file}" || {
+    rm -f "${tmp_file}"
+    die "无法在 ${file} 中插入受控端口块，请先检查当前 nftables 配置格式。"
+  }
+
+  replace_file_with_tmp_if_changed "${file}" "${tmp_file}" "true"
+}
+
+nftables_write_managed_extra_tcp_ports() {
+  local file=""
+  local begin_marker=""
+  local end_marker=""
+  local tmp_file=""
+  local block_file=""
+  local normalized_ports=()
+
+  file="$(nftables_config_path)"
+  begin_marker="$(nftables_extra_ports_begin_marker)"
+  end_marker="$(nftables_extra_ports_end_marker)"
+
+  nftables_ensure_extra_ports_block
+
+  if (($# > 0)); then
+    mapfile -t normalized_ports < <(normalize_numeric_port_list "$@")
+  fi
+
+  tmp_file="$(mktemp)"
+  block_file="$(mktemp)"
+  if ((${#normalized_ports[@]} > 0)); then
+    render_nftables_extra_port_lines "${normalized_ports[@]}" >"${block_file}"
+  else
+    : >"${block_file}"
+  fi
+
+  awk -v begin_marker="${begin_marker}" -v end_marker="${end_marker}" -v block_file="${block_file}" '
+    {
+      if (index($0, begin_marker)) {
+        print
+        while ((getline line < block_file) > 0) {
+          print line
+        }
+        in_block = 1
+        next
+      }
+      if (in_block) {
+        if (index($0, end_marker)) {
+          print
+          in_block = 0
+        }
+        next
+      }
+      print
+    }
+  ' "${file}" >"${tmp_file}"
+
+  rm -f "${block_file}"
+  replace_file_with_tmp_if_changed "${file}" "${tmp_file}" "true"
+}
+
+nftables_reload_and_validate() {
+  local file=""
+  file="$(nftables_config_path)"
+
+  [[ -f "${file}" ]] || die "nftables 配置不存在：${file}。"
+
+  require_root
+  require_debian12
+  apt_install_packages nftables
+  run_cmd "Checking nftables syntax" nft -c -f "${file}"
+  enable_and_start_service "nftables"
+  run_cmd "Loading nftables rules" nft -f "${file}"
+}
+
+nftables_open_tcp_ports() {
+  local existing_ports=()
+  local requested_ports=()
+  local merged_ports=()
+
+  mapfile -t existing_ports < <(nftables_list_managed_extra_tcp_ports)
+  mapfile -t requested_ports < <(normalize_numeric_port_list "$@")
+  mapfile -t merged_ports < <(normalize_numeric_port_list "${existing_ports[@]}" "${requested_ports[@]}")
+
+  nftables_write_managed_extra_tcp_ports "${merged_ports[@]}"
+  nftables_reload_and_validate
+}
+
+nftables_close_tcp_ports() {
+  local existing_ports=()
+  local requested_ports=()
+  local remaining_ports=()
+  local port=""
+
+  mapfile -t existing_ports < <(nftables_list_managed_extra_tcp_ports)
+  mapfile -t requested_ports < <(normalize_numeric_port_list "$@")
+
+  for port in "${existing_ports[@]}"; do
+    if ! selection_contains "${port}" "${requested_ports[@]}"; then
+      remaining_ports+=("${port}")
+    fi
+  done
+
+  nftables_write_managed_extra_tcp_ports "${remaining_ports[@]}"
+  nftables_reload_and_validate
 }
 
 apply_sysctl_dropin() {

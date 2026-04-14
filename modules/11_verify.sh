@@ -52,9 +52,16 @@ main() {
     failures=$((failures + 1))
   fi
 
+  if root_ssh_login_disabled; then
+    log info "[OK] Root remote SSH login is disabled"
+  else
+    log warn "[WARN] Root remote SSH login is still allowed"
+    warnings=$((warnings + 1))
+  fi
+
   if ssh_port_change_pending_confirmation; then
     log warn "[WARN] SSH port is configured as ${SSH_PORT}, but confirmation is still missing."
-    log warn "[WARN] Current effective SSH port remains $(effective_ssh_port_for_changes). Confirm cloud firewall/security-group and rerun step 6 and step 7."
+    log warn "[WARN] Current effective SSH port remains $(effective_ssh_port_for_changes). Confirm cloud firewall/security-group and rerun the merged admin-access stage plus the nftables step."
     warnings=$((warnings + 1))
   fi
 

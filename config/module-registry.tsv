@@ -2,19 +2,18 @@ step_no	module_id	phase	title_zh	short_desc_zh	risk_level	default_enabled	depend
 1	00_nodequality	init	运行 NodeQuality 基线检测	执行固定的 NodeQuality 命令，对当前 VPS 做基础环境和网络质量检测。	medium	true	-	modules/00_nodequality.sh	该步骤会访问外部地址并运行固定基线命令，用于在初始化前先了解这台 VPS 的网络质量、基础环境和可疑配置情况，方便后续比对。
 2	01_detect_system	init	检查当前系统和机器基础信息	识别当前是否为 Debian 12，并收集主机名、内核、磁盘、内存等基础信息。	low	true	00_nodequality	modules/01_detect_system.sh	该步骤主要做只读检测，确认当前系统版本与基础硬件信息，帮助你判断后续初始化策略是否适配当前机器。
 3	02_update_base	init	更新系统并安装基础工具	刷新软件包索引、升级系统，并安装后续初始化依赖的基础工具。	medium	true	01_detect_system	modules/02_update_base.sh	该步骤会通过 apt 更新软件包索引，安装基础命令和依赖包，并应用保守型升级，让后续模块运行环境更完整。
-4	03_admin_user	init	创建日常管理账号并授予 sudo 权限	创建普通管理用户，后续尽量不直接使用 root 进行日常管理。	medium	true	02_update_base	modules/03_admin_user.sh	该步骤会创建管理账号、补充 sudo 组、准备 home 目录和 shell，目的是把日常管理操作逐步从 root 切换到普通管理用户。
-5	04_ssh_keys	init	为管理账号配置 SSH 公钥登录	把准备好的公钥写入管理用户的 authorized_keys，为后续收紧 SSH 做准备。	medium	true	03_admin_user	modules/04_ssh_keys.sh	该步骤会把你提前准备好的公钥写入管理用户目录，只有在确认至少存在有效公钥后，后面的 SSH 收紧动作才有安全前提。
-6	05_ssh_hardening	init	加固 SSH 登录方式和连接规则	根据配置收紧 SSH，例如切换端口、限制 root 密码登录，并在安全门通过后关闭密码登录。	high	true	03_admin_user,04_ssh_keys	modules/05_ssh_hardening.sh	这是高风险步骤。它会改 SSH drop-in 配置、做语法检查并 reload 服务；如果准备不充分，尤其是公钥未验证或端口切换未确认，可能导致远程连接失败。
-7	06_nftables	init	启用 nftables 防火墙并只放行必要端口	生成并启用基础防火墙规则，默认只允许 SSH 端口进入。	high	true	05_ssh_hardening	modules/06_nftables.sh	这是高风险步骤。它会将入站默认策略收紧为 drop，并只保留当前生效 SSH 端口；如果云防火墙、安全组和 SSH 端口未同步，可能导致无法连接。
-8	07_time_sync	init	配置时区和自动时间同步	设置系统时区，并启用 systemd-timesyncd 进行自动校时。	low	true	02_update_base	modules/07_time_sync.sh	该步骤会统一系统时间基础设置，减少日志时间漂移、证书校验异常和计划任务错时的问题。
-9	08_auto_updates	init	启用自动安全更新	安装并配置 unattended-upgrades，让系统自动安装安全更新。	medium	true	02_update_base	modules/08_auto_updates.sh	该步骤会启用 Debian 12 常见的自动安全更新机制，适合长期在线的 VPS，但你仍应保留定期人工审查。
-10	09_fail2ban	init	启用 Fail2Ban 防暴力破解	监控 SSH 登录失败记录，对多次尝试错误密码的来源进行临时封禁。	medium	true	05_ssh_hardening	modules/09_fail2ban.sh	该步骤会基于 SSH 日志做基础暴力破解防护，适合作为防火墙之外的第二层登录保护措施。
-11	10_swap	init	根据机器配置决定是否启用 swap	在小内存 VPS 上按策略创建并启用 swap，缓解内存不足问题。	medium	true	02_update_base	modules/10_swap.sh	该步骤会根据内存规模和配置决定是否创建 /swapfile。它不是性能优化万能药，但在小内存场景下可以降低因 OOM 导致服务直接被杀的风险。
-12	11_verify	init	执行初始化结果检查	检查 SSH、防火墙、时间同步、Fail2Ban、自动更新、swap 等关键状态是否已正确生效。	low	true	05_ssh_hardening,06_nftables,07_time_sync,08_auto_updates,09_fail2ban,10_swap	modules/11_verify.sh	该步骤不主动做高风险改动，主要用于把关键项目重新检查一遍，尽早发现初始化后仍未生效或仍有风险的地方。
-13	12_summary	init	输出初始化摘要和后续提醒	汇总当前系统状态，并提示下一步手动操作，例如验证 SSH、新建快照、记录配置。	low	true	11_verify	modules/12_summary.sh	该步骤会输出面向人阅读的初始化摘要，提醒你继续验证 SSH、新建快照、记录配置和后续按角色扩展服务端口。
+4	03_admin_access_stage	init	创建并配置管理用户接入	按顺序完成管理用户创建、SSH 公钥配置和 SSH 接入准备。	high	true	02_update_base	modules/03_admin_access_stage.sh	这是一个连续阶段，会依次执行创建管理用户、写入 authorized_keys 和 SSH 接入准备。该阶段结束后会明确提示你使用“管理用户 + SSH 公钥”先在新窗口验证连接；root 远程登录此时仍保留，第 7 步才会正式关闭。
+5	07_time_sync	init	配置时区和自动时间同步	设置系统时区，并启用 systemd-timesyncd 进行自动校时。	low	true	02_update_base	modules/07_time_sync.sh	该步骤会统一系统时间基础设置，减少日志时间漂移、证书校验异常和计划任务错时的问题。
+6	08_auto_updates	init	启用自动安全更新	安装并配置 unattended-upgrades，让系统自动安装安全更新。	medium	true	02_update_base	modules/08_auto_updates.sh	该步骤会启用 Debian 12 常见的自动安全更新机制，适合长期在线的 VPS，但你仍应保留定期人工审查。
+7	07_switch_admin_login	init	切换为管理用户登录并关闭 root 远程登录	在确认管理用户 SSH 公钥登录可用后，关闭 root 远程 SSH 登录。	high	true	03_admin_access_stage	modules/07_switch_admin_login.sh	这是明确的切换步骤。执行前会检查管理用户、公钥、sshd 语法和当前 SSH 端口，并要求你再次确认已在新窗口验证管理用户可登录；若修改了 SSH 端口，还必须确认云厂商安全组/云防火墙已同步放行。
+8	06_nftables	init	启用 nftables 防火墙并只放行必要端口	生成并启用基础防火墙规则，默认只允许 SSH 端口进入。	high	true	07_switch_admin_login	modules/06_nftables.sh	这是高风险步骤。它会将入站默认策略收紧为 drop，并只保留当前生效 SSH 端口；如果云防火墙、安全组和 SSH 端口未同步，可能导致无法连接。
+9	09_fail2ban	init	启用 Fail2Ban 防暴力破解	监控 SSH 登录失败记录，对多次尝试错误密码的来源进行临时封禁。	medium	true	03_admin_access_stage	modules/09_fail2ban.sh	该步骤会基于 SSH 日志做基础暴力破解防护，适合作为防火墙之外的第二层登录保护措施。
+10	10_swap	init	根据机器配置决定是否启用 swap	在小内存 VPS 上按策略创建并启用 swap，缓解内存不足问题。	medium	true	02_update_base	modules/10_swap.sh	该步骤会根据内存规模和配置决定是否创建 /swapfile。它不是性能优化万能药，但在小内存场景下可以降低因 OOM 导致服务直接被杀的风险。
+11	11_verify	init	执行初始化结果检查	检查 SSH、防火墙、时间同步、Fail2Ban、自动更新、swap 等关键状态是否已正确生效。	low	true	03_admin_access_stage,07_switch_admin_login,06_nftables,07_time_sync,08_auto_updates,09_fail2ban,10_swap	modules/11_verify.sh	该步骤不主动做高风险改动，主要用于把关键项目重新检查一遍，尽早发现初始化后仍未生效或仍有风险的地方。
+12	12_summary	init	输出初始化摘要和后续提醒	汇总当前系统状态，并提示下一步手动操作，例如验证 SSH、新建快照、记录配置。	low	true	11_verify	modules/12_summary.sh	该步骤会输出面向人阅读的初始化摘要，提醒你继续验证管理用户 SSH、新建快照、记录配置和后续按角色扩展服务端口。
 1	20_update_system	maintain	定期更新系统软件	刷新索引、安装系统更新，并清理不再需要的软件包。	medium	true	-	maintenance/20_update_system.sh	适合定期执行的保守型系统维护动作，用于减少系统落后版本积压，保持基础软件包处于较新状态。
 2	21_audit_users_ssh	maintain	审查用户、sudo 和 SSH 密钥	检查交互式用户、sudo 成员以及各用户 authorized_keys 情况。	medium	true	-	maintenance/21_audit_users_ssh.sh	该任务用于发现多余账号、遗留 sudo 权限和未审查的 SSH 公钥，适合在人员或运维方式发生变化后重点检查。
-3	22_audit_firewall	maintain	检查防火墙规则与实际服务	对照当前监听端口和 nftables 规则，检查是否存在暴露面与预期不一致的问题。	medium	true	-	maintenance/22_audit_firewall.sh	该任务用于发现“服务已经监听但你忘了开口子”或“端口本不该开放却仍在监听”的问题，适合每次业务变更后执行。
+3	22_audit_firewall	maintain	端口管理与防火墙检查	查看当前监听端口与 nftables 规则，并在菜单中进入开放/关闭端口操作。	medium	true	-	maintenance/22_audit_firewall.sh	该入口会先帮助你核对当前监听端口和 nftables 规则；在菜单交互里还可以继续做开放/关闭端口操作。这里修改的只是服务器内部防火墙，若云厂商还有安全组或云防火墙，也必须同步放行或关闭，否则公网访问结果可能与本机规则不一致。
 4	23_audit_fail2ban_logs	maintain	检查 Fail2Ban 与登录日志	查看 Fail2Ban 状态和近期 SSH 登录失败情况。	medium	true	-	maintenance/23_audit_fail2ban_logs.sh	该任务用于判断最近是否存在异常登录尝试、误封、封禁效果不明显等情况，是 SSH 风险巡检的重要组成部分。
 5	24_monitor_basic	maintain	查看基础资源与服务健康	查看 CPU、内存、磁盘、网络套接字和失败的 systemd 服务。	low	true	-	maintenance/24_monitor_basic.sh	该任务用于快速了解机器的基本健康度，适合排查“机器卡顿”“磁盘满了”“服务异常退出”等常见问题。
 6	25_cleanup	maintain	清理日志和缓存	清理 apt 缓存、无用软件包和过旧 journal 日志。	low	true	20_update_system	maintenance/25_cleanup.sh	该任务用于减少无用占用，尤其适合磁盘较小的 VPS，但不会对业务数据目录做破坏性删除。

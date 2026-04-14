@@ -50,6 +50,20 @@ validate_ssh_port() {
   [[ -z "${error_message}" ]] || die "${error_message}"
 }
 
+port_validation_error_zh() {
+  local port="${1:-}"
+
+  if [[ ! "${port}" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "端口必须是数字。"
+    return 0
+  fi
+
+  if (( port < 1 || port > 65535 )); then
+    printf '%s\n' "端口范围必须在 1 到 65535 之间。"
+    return 0
+  fi
+}
+
 admin_user_validation_error() {
   local username=""
   username="$(trim_surrounding_whitespace "${1:-}")"

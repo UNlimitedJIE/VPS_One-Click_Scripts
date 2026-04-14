@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Module: 22_audit_firewall
-# Purpose: 检查防火墙规则与实际监听服务是否匹配。
+# Purpose: 作为长期维护中的端口管理入口，查看监听端口和 nftables 规则。
 # Preconditions: root。
 # Steps:
 #   1. 检查 nftables 是否启用
@@ -18,11 +18,14 @@ source "${SCRIPT_DIR}/../lib/common.sh"
 main() {
   load_config
   init_runtime
-  module_banner "22_audit_firewall" "检查防火墙规则是否与实际服务一致"
+  module_banner "22_audit_firewall" "端口管理与防火墙检查"
   require_root
 
   local report=""
   report+="Audit time: $(date -Iseconds)"$'\n'
+  report+="Warning: this view only reflects the server itself."$'\n'
+  report+="If your cloud provider also has security-group / cloud-firewall rules, you must keep them in sync manually."$'\n'
+  report+=$'\n'
   report+="nftables enabled: "
   if service_enabled "nftables" && service_active "nftables"; then
     report+="yes"$'\n'
@@ -42,6 +45,14 @@ main() {
       report+="  review: service is listening on ${port}; ensure nftables/security-group policy matches intent."$'\n'
     fi
   done < <(listening_tcp_ports)
+
+  report+=$'\n'
+  report+="Current nftables ruleset:"$'\n'
+  if command_exists nft; then
+    report+="$(nft list ruleset 2>/dev/null || echo "nft list ruleset failed")"$'\n'
+  else
+    report+="nft command not found"$'\n'
+  fi
 
   log info "${report}"
 

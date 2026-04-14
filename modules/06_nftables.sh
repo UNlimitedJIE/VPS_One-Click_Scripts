@@ -58,6 +58,8 @@ table inet filter {
     ip6 nexthdr ipv6-icmp accept
 
     tcp dport ${firewall_ssh_port} accept comment "SSH"
+    # BEGIN VPS EXTRA TCP PORTS
+    # END VPS EXTRA TCP PORTS
   }
 
   chain forward {
@@ -87,6 +89,7 @@ EOF
   else
     log warn "Only SSH port ${firewall_ssh_port} is allowed by default. HTTP/HTTPS remain closed unless future modules open them."
   fi
+  log warn "Reminder: nftables only controls this server itself. If your cloud provider also has security-group/cloud-firewall rules, update them in the provider console as well."
 }
 
 main "$@"

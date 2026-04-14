@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Module: 05_ssh_hardening
-# Purpose: 使用 sshd_config.d drop-in 方式做 SSH 基础加固。
+# Purpose: 使用 sshd_config.d drop-in 方式做 SSH 接入准备。
 # Preconditions: root；Debian 12；openssh-server 可用。
 # Steps:
 #   1. 确认 sshd 服务存在
@@ -21,7 +21,7 @@ source "${SCRIPT_DIR}/../lib/common.sh"
 main() {
   load_config
   init_runtime
-  module_banner "05_ssh_hardening" "SSH 基础加固"
+  module_banner "05_ssh_hardening" "SSH 接入准备"
   require_root
   require_debian12
 
@@ -41,9 +41,6 @@ main() {
   fi
 
   local permit_root_login="yes"
-  if is_true "${DISABLE_ROOT_SSH_PASSWORD}"; then
-    permit_root_login="prohibit-password"
-  fi
 
   local current_port requested_port applied_port target_file content
   current_port="$(current_ssh_port)"
@@ -57,7 +54,7 @@ main() {
   target_file="/etc/ssh/sshd_config.d/99-vps-bootstrap.conf"
   content="$(cat <<EOF
 # Managed by VPS bootstrap project.
-# Purpose: baseline SSH hardening for Debian 12.
+# Purpose: baseline SSH access preparation for Debian 12.
 
 Port ${applied_port}
 PubkeyAuthentication yes
@@ -84,6 +81,7 @@ EOF
   set_state "SSH_PORT_CHANGE_CONFIRMED" "${CONFIRM_SSH_PORT_CHANGE}"
   set_state "SSH_PASSWORD_LOGIN" "${password_auth}"
   set_state "ROOT_SSH_MODE" "${permit_root_login}"
+  log info "Root 远程 SSH 登录在本阶段仍保持可用；请先验证管理用户可登录，第 7 步才会正式关闭 root 远程登录。"
 
   if [[ "${requested_port}" != "${applied_port}" ]]; then
     log warn "SSH port change is pending confirmation. Requested ${requested_port}, still applying ${applied_port}."

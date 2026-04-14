@@ -26,10 +26,11 @@ main() {
     return 0
   fi
 
-  local admin_state auth_state nft_state ts_state f2b_state au_state swap_state
+  local admin_state auth_state root_ssh_state nft_state ts_state f2b_state au_state swap_state
   local requested_ssh_port effective_ssh_port port_confirm_state
   admin_state="no"
   auth_state="no"
+  root_ssh_state="unknown"
   nft_state="no"
   ts_state="no"
   f2b_state="no"
@@ -42,6 +43,12 @@ main() {
 
   if [[ -n "${ADMIN_USER}" ]] && authorized_keys_present_for_user "${ADMIN_USER}"; then
     auth_state="yes"
+  fi
+
+  if root_ssh_login_disabled; then
+    root_ssh_state="disabled"
+  else
+    root_ssh_state="enabled"
   fi
 
   if service_enabled "nftables" && service_active "nftables"; then
@@ -82,6 +89,7 @@ Effective SSH port: ${effective_ssh_port}
 SSH port change confirmation: ${port_confirm_state}
 Admin user detected: ${admin_state}
 authorized_keys detected: ${auth_state}
+Root remote SSH login: ${root_ssh_state}
 nftables enabled: ${nft_state}
 timesyncd enabled: ${ts_state}
 fail2ban enabled: ${f2b_state}
@@ -89,9 +97,9 @@ unattended-upgrades enabled: ${au_state}
 Swap status: ${swap_state}
 
 Recommended next steps:
-1. Keep the current SSH session open and test a fresh login on port ${effective_ssh_port}.
+1. Keep the current root session open and test a fresh admin-user login on port ${effective_ssh_port}.
 2. Confirm cloud firewall/security-group matches the SSH port you actually want to use.
-3. Review /etc/ssh/sshd_config.d/99-vps-bootstrap.conf and /etc/nftables.conf.
+3. Review /etc/ssh/sshd_config.d/99-vps-bootstrap.conf, /etc/ssh/sshd_config.d/999-vps-root-login-cutover.conf and /etc/nftables.conf.
 4. If you plan to move away from port 22, set CONFIRM_SSH_PORT_CHANGE="true" only after external access is verified.
 5. After verification, create a provider snapshot or backup.
 6. Add business ports later through dedicated role/module scripts, not by editing core baseline blindly.

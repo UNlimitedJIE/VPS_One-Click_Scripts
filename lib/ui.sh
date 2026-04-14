@@ -199,9 +199,9 @@ ui_choose_phase() {
   while true; do
     ui_print_raw $'\nVPS 初始化与维护根菜单\n\n'
     ui_print_raw $'1. 初始化菜单\n'
-    ui_print_raw $'   进入初始化 1 到 13 步菜单，按数字执行。\n'
+    ui_print_raw $'   进入初始化菜单，按数字执行各阶段。\n'
     ui_print_raw $'2. 长期维护菜单\n'
-    ui_print_raw $'   进入维护 1 到 10 菜单，10 可继续进入谨慎操作子菜单。\n'
+    ui_print_raw $'   进入长期维护菜单，可继续进入端口管理和谨慎操作子菜单。\n'
     ui_print_raw $'0. 退出程序\n\n'
     ui_print_raw "请输入编号："
     ui_read_line || return 1
