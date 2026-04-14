@@ -12,6 +12,15 @@
 - 第 10 项不再是笼统入口，而是展开为 10.1 到 10.10 的谨慎操作子菜单
 - 根菜单与子菜单的 `0` 行为已统一
 
+## Quick Start
+
+```bash
+git clone https://github.com/UNlimitedJIE/VPS_One-Click_Scripts.git
+cd VPS_One-Click_Scripts
+bash bootstrap.sh show init
+bash bootstrap.sh plan init
+sudo bash bootstrap.sh init
+
 ## 设计目标
 
 - 统一入口：`bootstrap.sh`
