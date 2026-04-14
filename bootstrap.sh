@@ -324,6 +324,11 @@ warn_missing_dependencies() {
 run_phase_from_registry() {
   local phase="$1"
   shift || true
+  local cancel_mode="command"
+  if (($# > 0)) && [[ "$1" == "menu" || "$1" == "command" ]]; then
+    cancel_mode="$1"
+    shift
+  fi
   local selected=("$@")
   local line=""
   local module_id=""
@@ -333,12 +338,18 @@ run_phase_from_registry() {
     for module_id in "${selected[@]}"; do
       line="$(registry_find_line "${module_id}" || true)"
       [[ -n "${line}" ]] || die "Module not found in registry: ${module_id}"
+      if ! is_true "${PLAN_ONLY:-false}" && registry_line_requires_admin_user "${line}"; then
+        ensure_admin_user_for_execution "${cancel_mode}" || return 130
+      fi
       run_module_from_registry_line "${line}"
     done
     return 0
   fi
 
   while IFS= read -r line; do
+    if ! is_true "${PLAN_ONLY:-false}" && registry_line_requires_admin_user "${line}"; then
+      ensure_admin_user_for_execution "${cancel_mode}" || return 130
+    fi
     run_module_from_registry_line "${line}"
   done < <(registry_lines "${phase}")
 }
@@ -398,7 +409,7 @@ render_execution_summary() {
 
 init_module_requires_admin_user() {
   case "${1:-}" in
-    03_admin_user|04_ssh_keys|05_ssh_hardening|11_verify|12_summary)
+    03_admin_user|04_ssh_keys|05_ssh_hardening)
       return 0
       ;;
     *)
@@ -612,6 +623,10 @@ menu_execute_with_feedback() {
   )
   status=$?
   set -e
+
+  if (( status == 130 )); then
+    return 0
+  fi
 
   if (( status == 0 )); then
     menu_show_action_result "success" "${summary}"
@@ -1016,10 +1031,6 @@ run_cautious_modules() {
 }
 
 menu_init_phase() {
-  if ! ensure_admin_user_for_execution "menu"; then
-    return 0
-  fi
-
   while true; do
     local raw_input=""
     if ! prompt_init_execution_input; then
@@ -1042,7 +1053,7 @@ menu_init_phase() {
       mapfile -t sequence_ids < <(prompt_init_sequence_selection || true)
       ((${#sequence_ids[@]} > 0)) || continue
       sequence_summary="$(menu_action_summary "init" "${sequence_ids[@]}")"
-      menu_execute_with_feedback "${sequence_summary}" run_phase_from_registry "init" "${sequence_ids[@]}" || true
+      menu_execute_with_feedback "${sequence_summary}" run_phase_from_registry "init" "menu" "${sequence_ids[@]}" || true
       continue
     fi
 
@@ -1080,7 +1091,7 @@ menu_init_phase() {
     }
 
     selection_summary="$(menu_action_summary "init" "${normalized_selection[@]}")"
-    menu_execute_with_feedback "${selection_summary}" run_phase_from_registry "init" "${normalized_selection[@]}" || true
+    menu_execute_with_feedback "${selection_summary}" run_phase_from_registry "init" "menu" "${normalized_selection[@]}" || true
   done
 }
 
@@ -1158,7 +1169,7 @@ menu_maintain_phase() {
         ((${#sequence_ids[@]} > 0)) || die "No maintain modules found for steps 1 to 8."
         confirm_maintain_sequence "${sequence_ids[@]}" || continue
         sequence_summary="$(menu_action_summary "maintain" "${sequence_ids[@]}")"
-        menu_execute_with_feedback "${sequence_summary}" run_phase_from_registry "maintain" "${sequence_ids[@]}" || true
+        menu_execute_with_feedback "${sequence_summary}" run_phase_from_registry "maintain" "menu" "${sequence_ids[@]}" || true
         continue
         ;;
       10)
@@ -1201,7 +1212,7 @@ menu_maintain_phase() {
     }
 
     selection_summary="$(menu_action_summary "maintain" "${normalized_selection[@]}")"
-    menu_execute_with_feedback "${selection_summary}" run_phase_from_registry "maintain" "${normalized_selection[@]}" || true
+    menu_execute_with_feedback "${selection_summary}" run_phase_from_registry "maintain" "menu" "${normalized_selection[@]}" || true
   done
 }
 
@@ -1262,11 +1273,16 @@ main() {
     init)
       RUN_MODE="init"
       prepare_context
-      if ! ensure_admin_user_for_execution "command"; then
+      ensure_runtime_initialized
+      local init_status=0
+      set +e
+      run_phase_from_registry "init" "command"
+      init_status=$?
+      set -e
+      if (( init_status == 130 )); then
         return 0
       fi
-      ensure_runtime_initialized
-      run_phase_from_registry "init"
+      (( init_status == 0 )) || return "${init_status}"
       ;;
     maintain)
       RUN_MODE="maintain"
@@ -1281,21 +1297,31 @@ main() {
       local line=""
       line="$(registry_find_line "${BOOTSTRAP_TARGET}" || true)"
       if [[ -n "${line}" ]]; then
-        if registry_line_requires_admin_user "${line}"; then
-          if ! ensure_admin_user_for_execution "command"; then
-            return 0
-          fi
+        local run_status=0
+        set +e
+        if ! is_true "${PLAN_ONLY:-false}" && registry_line_requires_admin_user "${line}"; then
+          ensure_admin_user_for_execution "command" || run_status=$?
         fi
+        set -e
+        if (( run_status == 1 )); then
+          return 0
+        fi
+        (( run_status == 0 )) || return "${run_status}"
         ensure_runtime_initialized
         run_module_from_registry_line "${line}"
       else
         local module_path=""
         module_path="$(resolve_module_path "${BOOTSTRAP_TARGET}")" || die "Module not found: ${BOOTSTRAP_TARGET}"
-        if module_path_requires_admin_user "${module_path}"; then
-          if ! ensure_admin_user_for_execution "command"; then
-            return 0
-          fi
+        local run_status=0
+        set +e
+        if ! is_true "${PLAN_ONLY:-false}" && module_path_requires_admin_user "${module_path}"; then
+          ensure_admin_user_for_execution "command" || run_status=$?
         fi
+        set -e
+        if (( run_status == 1 )); then
+          return 0
+        fi
+        (( run_status == 0 )) || return "${run_status}"
         ensure_runtime_initialized
         run_script_path "${module_path}"
       fi
@@ -1310,13 +1336,16 @@ main() {
         selected_init_ids=("${RESOLVED_INIT_STEP_IDS[@]}")
       fi
       ((${#selected_init_ids[@]} > 0)) || die "No init steps selected."
-      if init_selection_requires_admin_user "${selected_init_ids[@]}"; then
-        if ! ensure_admin_user_for_execution "command"; then
-          return 0
-        fi
-      fi
       ensure_runtime_initialized
-      run_phase_from_registry "init" "${selected_init_ids[@]}"
+      local step_status=0
+      set +e
+      run_phase_from_registry "init" "command" "${selected_init_ids[@]}"
+      step_status=$?
+      set -e
+      if (( step_status == 130 )); then
+        return 0
+      fi
+      (( step_status == 0 )) || return "${step_status}"
       ;;
     stepseq)
       [[ -n "${BOOTSTRAP_TARGET}" ]] || die "stepseq mode requires a target init step number, for example: stepseq 7"
@@ -1334,15 +1363,11 @@ main() {
 
       local sequence_ids=()
       local sequence_line=""
+      local stepseq_status=0
       while IFS= read -r sequence_line; do
         [[ -n "${sequence_line}" ]] && sequence_ids+=("${sequence_line}")
       done < <(build_init_sequence_to_step "${target_step}")
       ((${#sequence_ids[@]} > 0)) || die "No init steps found for range 2-${target_step}."
-      if init_selection_requires_admin_user "${sequence_ids[@]}"; then
-        if ! ensure_admin_user_for_execution "command"; then
-          return 0
-        fi
-      fi
 
       local preview=""
       local confirmation_body=""
@@ -1356,7 +1381,14 @@ EOF
 
       confirm_terminal_yes "stepseq 确认" "${confirmation_body}" || die "stepseq aborted by user."
       ensure_runtime_initialized
-      run_phase_from_registry "init" "${sequence_ids[@]}"
+      set +e
+      run_phase_from_registry "init" "command" "${sequence_ids[@]}"
+      stepseq_status=$?
+      set -e
+      if (( stepseq_status == 130 )); then
+        return 0
+      fi
+      (( stepseq_status == 0 )) || return "${stepseq_status}"
       ;;
     plan)
       CLI_PLAN_ONLY="true"
@@ -1366,13 +1398,13 @@ EOF
           RUN_MODE="plan-init"
           prepare_context
           ensure_runtime_initialized
-          run_phase_from_registry "init"
+          run_phase_from_registry "init" "command"
           ;;
         maintain)
           RUN_MODE="plan-maintain"
           prepare_context
           ensure_runtime_initialized
-          run_phase_from_registry "maintain"
+          run_phase_from_registry "maintain" "command"
           ;;
         install-shortcut)
           RUN_MODE="plan-install-shortcut"
