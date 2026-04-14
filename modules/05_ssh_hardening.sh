@@ -41,6 +41,11 @@ main() {
   local requested_port=""
   local applied_port=""
   local step5_ready_state="no"
+  local port_source=""
+  local pubkey_source=""
+  local password_source=""
+  local kbd_source=""
+  local root_source=""
 
   if [[ -n "${ADMIN_USER:-}" ]] && id -u "${ADMIN_USER}" >/dev/null 2>&1; then
     target_keys_ready="$(ssh_publickey_login_ready_label_for_user "${ADMIN_USER}")"
@@ -92,6 +97,11 @@ main() {
   current_pubkey_auth="$(current_pubkey_authentication_mode || true)"
   current_kbd_auth="$(current_kbdinteractive_authentication_mode || true)"
   current_root_auth="$(current_permit_root_login_mode || true)"
+  port_source="$(sshd_last_directive_source_line "Port" || true)"
+  pubkey_source="$(sshd_last_directive_source_line "PubkeyAuthentication" || true)"
+  password_source="$(sshd_last_directive_source_line "PasswordAuthentication" || true)"
+  kbd_source="$(sshd_last_directive_source_line "KbdInteractiveAuthentication" || true)"
+  root_source="$(sshd_last_directive_source_line "PermitRootLogin" || true)"
   if ssh_port_is_listening_locally "${applied_port}"; then
     target_port_listening="yes"
   fi
@@ -137,12 +147,24 @@ main() {
   log info "Publickey-only test: $(ssh_force_publickey_test_command "${ADMIN_USER:-<ADMIN_USER>}" "${applied_port}")"
   log info "Password-only test: $(ssh_force_password_test_command "${ADMIN_USER:-<ADMIN_USER>}" "${applied_port}")"
 
-  if [[ "${current_pubkey_auth}" != "yes" ]]; then
-    log warn "Unexpected SSH state: effective PubkeyAuthentication is ${current_pubkey_auth}. Check $(sshd_last_directive_source_line "PubkeyAuthentication" || printf '/etc/ssh/sshd_config')."
+  if [[ "${runtime_port}" != "${applied_port}" ]]; then
+    die "SSH 实际端口与本阶段目标不一致：expected port=${applied_port}, actual port=${runtime_port}. Source: ${port_source:-not found}"
   fi
 
-  if [[ "${runtime_port}" != "${applied_port}" ]]; then
-    log warn "Configured effective SSH port is ${applied_port}, but sshd -T currently reports ${runtime_port}."
+  if [[ "${current_pubkey_auth}" != "${applied_pubkey_auth}" ]]; then
+    die "SSH 实际 pubkeyauthentication 与本阶段目标不一致：expected ${applied_pubkey_auth}, actual ${current_pubkey_auth}. Source: ${pubkey_source:-not found}"
+  fi
+
+  if [[ "${current_password_auth}" != "${applied_password_auth}" ]]; then
+    die "SSH 实际 passwordauthentication 与本阶段目标不一致：expected ${applied_password_auth}, actual ${current_password_auth}. Source: ${password_source:-not found}"
+  fi
+
+  if [[ "${current_kbd_auth}" != "${applied_kbd_auth}" ]]; then
+    die "SSH 实际 kbdinteractiveauthentication 与本阶段目标不一致：expected ${applied_kbd_auth}, actual ${current_kbd_auth}. Source: ${kbd_source:-not found}"
+  fi
+
+  if [[ "${current_root_auth}" != "${permit_root_login}" ]]; then
+    die "SSH 实际 permitrootlogin 与本阶段目标不一致：expected ${permit_root_login}, actual ${current_root_auth}. Source: ${root_source:-not found}"
   fi
 
   if [[ "${target_port_listening}" != "yes" ]]; then

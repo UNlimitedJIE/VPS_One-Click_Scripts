@@ -1498,6 +1498,16 @@ sshd_legacy_dropin_paths() {
   printf '%s\n' "/etc/ssh/sshd_config.d/999-vps-root-login-cutover.conf"
 }
 
+sshd_managed_directive_names() {
+  cat <<'EOF'
+Port
+PubkeyAuthentication
+PasswordAuthentication
+KbdInteractiveAuthentication
+PermitRootLogin
+EOF
+}
+
 sshd_build_managed_settings_block() {
   local port="${1:-22}"
   local pubkey_auth="${2:-yes}"
@@ -1518,6 +1528,72 @@ X11Forwarding no
 LoginGraceTime 30
 MaxAuthTries 3
 EOF
+}
+
+sshd_strip_managed_directives_from_file() {
+  local target="${1:-}"
+  local tmp_file=""
+  local directives_file=""
+
+  [[ -n "${target}" && -f "${target}" ]] || return 0
+
+  tmp_file="$(mktemp)"
+  directives_file="$(mktemp)"
+  sshd_managed_directive_names >"${directives_file}"
+
+  awk \
+    -v begin_marker="$(sshd_managed_begin_marker)" \
+    -v end_marker="$(sshd_managed_end_marker)" \
+    -v directives_file="${directives_file}" '
+      BEGIN {
+        while ((getline directive < directives_file) > 0) {
+          managed[tolower(directive)] = 1
+        }
+        close(directives_file)
+      }
+      index($0, begin_marker) {
+        in_block = 1
+        next
+      }
+      in_block {
+        if (index($0, end_marker)) {
+          in_block = 0
+        }
+        next
+      }
+      /^[[:space:]]*#/ {
+        print
+        next
+      }
+      {
+        if (tolower($1) == "match") {
+          in_match = 1
+          print
+          next
+        }
+        if (in_match) {
+          print
+          next
+        }
+        key = tolower($1)
+        if (key in managed) {
+          next
+        }
+        print
+      }
+    ' "${target}" >"${tmp_file}"
+
+  rm -f "${directives_file}"
+  replace_file_with_tmp_if_changed "${target}" "${tmp_file}" "true"
+}
+
+sshd_strip_managed_directives_from_all_sources() {
+  local file=""
+
+  while IFS= read -r file; do
+    [[ -n "${file}" && -f "${file}" ]] || continue
+    sshd_strip_managed_directives_from_file "${file}"
+  done < <(sshd_config_source_files)
 }
 
 sshd_apply_managed_settings() {
@@ -1541,6 +1617,8 @@ sshd_apply_managed_settings() {
     [[ -n "${legacy_dropin}" ]] || continue
     remove_file_if_exists "${legacy_dropin}"
   done < <(sshd_legacy_dropin_paths)
+
+  sshd_strip_managed_directives_from_all_sources
 
   replace_managed_block_in_file \
     "${target}" \
