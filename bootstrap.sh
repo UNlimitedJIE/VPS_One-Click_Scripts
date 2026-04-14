@@ -681,11 +681,11 @@ fi
 
 cd "${PROJECT_ROOT}"
 
-if [[ -f "config/local.conf" ]]; then
-  exec bash "bootstrap.sh" menu --config "config/local.conf" "$@"
+if [[ -f "${PROJECT_ROOT}/config/local.conf" ]]; then
+  exec bash "${PROJECT_ROOT}/bootstrap.sh" menu --config "${PROJECT_ROOT}/config/local.conf" "$@"
 fi
 
-exec bash "bootstrap.sh" menu "$@"
+exec bash "${PROJECT_ROOT}/bootstrap.sh" menu "$@"
 EOF
 }
 

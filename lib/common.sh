@@ -48,32 +48,90 @@ set_default_config() {
   SNAPSHOT_REMINDER="${SNAPSHOT_REMINDER:-初始化通过后，请先验证新 SSH 登录，再在云厂商控制台创建快照/备份。}"
 }
 
-load_config() {
-  set_default_config
+resolve_config_path() {
+  local path="${1:-}"
 
-  local chosen_config="${CLI_CONFIG_FILE:-${CONFIG_FILE:-${PROJECT_ROOT}/config/default.conf}}"
+  [[ -n "${path}" ]] || return 1
 
-  # Resolve relative path to absolute so child processes can always find the config
-  if [[ -n "${chosen_config}" && "${chosen_config}" != /* ]]; then
-    if [[ -f "${chosen_config}" ]]; then
-      chosen_config="$(cd "$(dirname "${chosen_config}")" && pwd)/$(basename "${chosen_config}")"
-    elif [[ -f "${PROJECT_ROOT}/${chosen_config}" ]]; then
-      chosen_config="${PROJECT_ROOT}/${chosen_config}"
+  if [[ "${path}" != /* ]]; then
+    if [[ -f "${path}" ]]; then
+      path="$(cd "$(dirname "${path}")" && pwd)/$(basename "${path}")"
+    else
+      path="${PROJECT_ROOT}/${path}"
     fi
   fi
 
-  CONFIG_FILE="${chosen_config}"
-  if [[ -f "${CONFIG_FILE}" ]]; then
+  if [[ -f "${path}" ]]; then
+    path="$(cd "$(dirname "${path}")" && pwd)/$(basename "${path}")"
+  fi
+
+  printf '%s\n' "${path}"
+}
+
+append_config_chain_entry() {
+  local current="${1:-}"
+  local entry="${2:-}"
+
+  if [[ -z "${current}" ]]; then
+    printf '%s\n' "${entry}"
+  else
+    printf '%s -> %s\n' "${current}" "${entry}"
+  fi
+}
+
+load_config() {
+  set_default_config
+
+  local default_config=""
+  local local_config=""
+  local requested_config_raw=""
+  local requested_config=""
+  local config_target=""
+  local config_chain=""
+
+  default_config="$(resolve_config_path "${PROJECT_ROOT}/config/default.conf")"
+  local_config="$(resolve_config_path "${PROJECT_ROOT}/config/local.conf")"
+  requested_config_raw="${CLI_CONFIG_FILE:-${CONFIG_FILE:-}}"
+
+  if [[ -f "${default_config}" ]]; then
     # shellcheck disable=SC1090
-    source "${CONFIG_FILE}"
+    source "${default_config}"
+    config_chain="$(append_config_chain_entry "${config_chain}" "${default_config}")"
+    config_target="${default_config}"
+  fi
+
+  if [[ -f "${local_config}" ]]; then
+    # shellcheck disable=SC1090
+    source "${local_config}"
+    if [[ "${local_config}" != "${default_config}" ]]; then
+      config_chain="$(append_config_chain_entry "${config_chain}" "${local_config}")"
+    fi
+    config_target="${local_config}"
+  fi
+
+  if [[ -n "${requested_config_raw}" ]]; then
+    requested_config="$(resolve_config_path "${requested_config_raw}")"
+    if [[ "${requested_config}" != "${default_config}" && "${requested_config}" != "${local_config}" ]]; then
+      config_target="${requested_config}"
+    fi
+
+    if [[ "${requested_config}" != "${default_config}" && "${requested_config}" != "${local_config}" && -f "${requested_config}" ]]; then
+      # shellcheck disable=SC1090
+      source "${requested_config}"
+      config_chain="$(append_config_chain_entry "${config_chain}" "${requested_config}")"
+    fi
   fi
 
   [[ -n "${CLI_PLAN_ONLY:-}" ]] && PLAN_ONLY="${CLI_PLAN_ONLY}"
   [[ -n "${CLI_DRY_RUN:-}" ]] && DRY_RUN="${CLI_DRY_RUN}"
-  # Re-anchor CONFIG_FILE and CLI_CONFIG_FILE to the resolved absolute path
-  # so child processes sourcing load_config always use the same config file
-  CONFIG_FILE="${chosen_config}"
-  CLI_CONFIG_FILE="${chosen_config}"
+
+  if [[ -z "${config_target}" ]]; then
+    config_target="${default_config}"
+  fi
+
+  ACTIVE_CONFIG_CHAIN="${config_chain:-${config_target}}"
+  CONFIG_FILE="${config_target}"
+  CLI_CONFIG_FILE="${config_target}"
   [[ -n "${RUNTIME_ADMIN_USER_OVERRIDE:-}" ]] && ADMIN_USER="${RUNTIME_ADMIN_USER_OVERRIDE}"
 
   MODULE_REGISTRY_FILE="${MODULE_REGISTRY_FILE:-${PROJECT_ROOT}/config/module-registry.tsv}"
@@ -85,6 +143,7 @@ load_config() {
 export_config() {
   export PROJECT_ROOT CONFIG_FILE CLI_CONFIG_FILE CLI_PLAN_ONLY CLI_DRY_RUN MODULE_REGISTRY_FILE STATE_DIR LOG_DIR CHANGE_LOG_FILE
   export DEFAULT_ADMIN_USER RUNTIME_ADMIN_USER_OVERRIDE
+  export ACTIVE_CONFIG_CHAIN
   export TIMEZONE SSH_PORT CONFIRM_SSH_PORT_CHANGE
   export ADMIN_USER ADMIN_USER_SHELL ADMIN_USER_GROUPS ADMIN_SUDO_MODE_DEFAULT AUTHORIZED_KEYS_FILE
   export DISABLE_PASSWORD_LOGIN DISABLE_ROOT_SSH_PASSWORD
@@ -124,6 +183,49 @@ active_config_file_path() {
   fi
 
   printf '%s\n' "${PROJECT_ROOT}/config/default.conf"
+}
+
+bootstrap_authorized_keys_fallback_path() {
+  printf '/root/bootstrap_authorized_keys\n'
+}
+
+admin_ssh_dir_for_user() {
+  local user="${1:-${ADMIN_USER:-}}"
+  local home_dir=""
+
+  [[ -n "${user}" ]] || return 1
+  home_dir="$(home_dir_for_user "${user}")"
+  [[ -n "${home_dir}" ]] || return 1
+  printf '%s/.ssh\n' "${home_dir}"
+}
+
+admin_authorized_keys_file_for_user() {
+  local user="${1:-${ADMIN_USER:-}}"
+  local ssh_dir=""
+
+  ssh_dir="$(admin_ssh_dir_for_user "${user}")" || return 1
+  printf '%s/authorized_keys\n' "${ssh_dir}"
+}
+
+admin_authorized_keys_count_for_user() {
+  local user="${1:-${ADMIN_USER:-}}"
+  local auth_file=""
+
+  auth_file="$(admin_authorized_keys_file_for_user "${user}" || true)"
+  [[ -n "${auth_file}" ]] || {
+    printf '%s\n' "0"
+    return 0
+  }
+
+  count_valid_ssh_keys_in_file "${auth_file}"
+}
+
+admin_authorized_keys_ready_for_user() {
+  local user="${1:-${ADMIN_USER:-}}"
+
+  [[ -n "${user}" ]] || return 1
+  id -u "${user}" >/dev/null 2>&1 || return 1
+  [[ "$(admin_authorized_keys_count_for_user "${user}")" -gt 0 ]]
 }
 
 set_runtime_admin_user() {

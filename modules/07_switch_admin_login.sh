@@ -36,20 +36,20 @@ confirm_cutover_execution() {
   ui_require_interactive || die "关闭 root 远程登录前需要交互确认，请在交互式终端中执行。"
 
   while true; do
-    if ! ui_prompt_input "确认关闭 root 远程登录" "$(cutover_warning_body)\n\n请输入 yes 继续，输入 no 或 0 取消当前步骤：" "no"; then
+    if ! ui_prompt_input "确认关闭 root 远程登录" "$(cutover_warning_body)\n\n请输入 CUTOVER 继续，输入 0 取消当前步骤：" ""; then
       return 130
     fi
 
     answer="$(ui_trim_value "${UI_LAST_INPUT}")"
     case "${answer}" in
-      yes|YES|y|Y)
+      CUTOVER)
         return 0
         ;;
-      no|NO|n|N|0|"")
+      0|"")
         return 130
         ;;
       *)
-        ui_warn_message "输入无效" "请输入 yes 继续，或输入 no / 0 取消当前步骤。"
+        ui_warn_message "输入无效" "请输入固定短语 CUTOVER 继续，或输入 0 取消当前步骤。"
         ;;
     esac
   done
@@ -57,12 +57,21 @@ confirm_cutover_execution() {
 
 ensure_cutover_prerequisites() {
   local effective_port=""
+  local auth_file=""
+  local auth_key_count="0"
+  local safe_gate_state=""
 
   [[ -n "${ADMIN_USER:-}" ]] || die "管理用户名未设置，无法关闭 root 远程登录。"
   id -u "${ADMIN_USER}" >/dev/null 2>&1 || die "管理用户不存在：${ADMIN_USER}"
-  authorized_keys_present_for_user "${ADMIN_USER}" || die "管理用户 ${ADMIN_USER} 尚未检测到有效 authorized_keys，不能继续关闭 root 远程登录。"
+  auth_file="$(admin_authorized_keys_file_for_user "${ADMIN_USER}" || true)"
+  [[ -n "${auth_file}" ]] || die "无法定位管理用户 ${ADMIN_USER} 的 authorized_keys 路径。"
+  [[ -f "${auth_file}" ]] || die "管理用户 ${ADMIN_USER} 的 authorized_keys 不存在：${auth_file}"
+  auth_key_count="$(count_valid_ssh_keys_in_file "${auth_file}")"
+  [[ "${auth_key_count}" -gt 0 ]] || die "管理用户 ${ADMIN_USER} 的 authorized_keys 中没有有效公钥，不能继续关闭 root 远程登录。"
   command_exists sshd || die "sshd 命令不存在，无法继续。"
   validate_sshd_config
+  safe_gate_state="$(get_state "SSH_SAFE_GATE_PASSED" || true)"
+  [[ "${safe_gate_state}" == "yes" ]] || die "SSH_SAFE_GATE_PASSED 不是 yes，当前未满足最终收口条件。请先重新完成第 4 步并确认目标账户公钥已有效安装。"
 
   effective_port="$(effective_ssh_port_for_changes)"
   [[ "${effective_port}" =~ ^[0-9]+$ ]] || die "当前 SSH 端口无法识别，不能继续关闭 root 远程登录。"

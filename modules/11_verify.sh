@@ -55,6 +55,39 @@ verify_shortcut_wrapper() {
   fi
 }
 
+verify_active_config_chain() {
+  local local_config=""
+  local_config="${PROJECT_ROOT}/config/local.conf"
+
+  if [[ -n "${ACTIVE_CONFIG_CHAIN:-}" ]]; then
+    verify_ok "ACTIVE_CONFIG_CHAIN=${ACTIVE_CONFIG_CHAIN}"
+  else
+    verify_warn "ACTIVE_CONFIG_CHAIN is empty"
+  fi
+
+  if [[ -f "${local_config}" && "${ACTIVE_CONFIG_CHAIN:-}" != *"${local_config}"* ]]; then
+    verify_warn "config/local.conf exists but is missing from ACTIVE_CONFIG_CHAIN: ${local_config}"
+  fi
+}
+
+verify_configured_runtime_values() {
+  if [[ -n "${ADMIN_USER:-}" ]]; then
+    verify_ok "Configured ADMIN_USER=${ADMIN_USER}"
+  else
+    verify_warn "Configured ADMIN_USER is empty"
+  fi
+
+  if [[ -n "${AUTHORIZED_KEYS_FILE:-}" ]]; then
+    if [[ -f "${AUTHORIZED_KEYS_FILE}" ]]; then
+      verify_ok "Configured AUTHORIZED_KEYS_FILE=${AUTHORIZED_KEYS_FILE}"
+    else
+      verify_warn "Configured AUTHORIZED_KEYS_FILE does not exist: ${AUTHORIZED_KEYS_FILE}"
+    fi
+  else
+    verify_warn "Configured AUTHORIZED_KEYS_FILE is empty"
+  fi
+}
+
 verify_admin_can_read_project_bootstrap() {
   if [[ -z "${ADMIN_USER}" ]]; then
     verify_warn "ADMIN_USER is empty; skip project readability check"
@@ -201,12 +234,15 @@ verify_sshd_effective_settings() {
   log info "[INFO] sshd -T only verifies effective local SSH settings; external SSH connectivity still needs a separate manual login test."
 }
 
-verify_admin_ssh_permissions() {
+verify_admin_authorized_keys_target() {
   local home_dir=""
   local ssh_dir=""
   local auth_file=""
   local ssh_owner_mode=""
   local auth_owner_mode=""
+  local key_count="0"
+  local safe_gate_state=""
+  local fallback_source=""
 
   if [[ -z "${ADMIN_USER}" ]]; then
     verify_warn "ADMIN_USER is empty; skip .ssh permission checks"
@@ -226,29 +262,52 @@ verify_admin_ssh_permissions() {
 
   ssh_dir="${home_dir}/.ssh"
   auth_file="${ssh_dir}/authorized_keys"
+  verify_ok "Target authorized_keys path=${auth_file}"
 
   if [[ ! -d "${ssh_dir}" ]]; then
     verify_warn "SSH directory missing: ${ssh_dir}"
-    return 0
-  fi
-
-  ssh_owner_mode="$(stat -c '%U:%G %a' "${ssh_dir}" 2>/dev/null || true)"
-  if [[ "${ssh_owner_mode}" == "${ADMIN_USER}:${ADMIN_USER} 700" ]]; then
-    verify_ok "SSH directory ownership and mode are correct: ${ssh_dir}"
   else
-    verify_fail "SSH directory ownership/mode mismatch for ${ssh_dir}: ${ssh_owner_mode:-<unknown>}"
+    ssh_owner_mode="$(stat -c '%U:%G %a' "${ssh_dir}" 2>/dev/null || true)"
+    if [[ "${ssh_owner_mode}" == "${ADMIN_USER}:${ADMIN_USER} 700" ]]; then
+      verify_ok "SSH directory ownership and mode are correct: ${ssh_dir}"
+    else
+      verify_fail "SSH directory ownership/mode mismatch for ${ssh_dir}: ${ssh_owner_mode:-<unknown>}"
+    fi
   fi
 
-  if [[ ! -f "${auth_file}" ]]; then
+  if [[ -f "${auth_file}" ]]; then
+    verify_ok "authorized_keys exists: ${auth_file}"
+    auth_owner_mode="$(stat -c '%U:%G %a' "${auth_file}" 2>/dev/null || true)"
+    if [[ "${auth_owner_mode}" == "${ADMIN_USER}:${ADMIN_USER} 600" ]]; then
+      verify_ok "authorized_keys ownership and mode are correct: ${auth_file}"
+    else
+      verify_fail "authorized_keys ownership/mode mismatch for ${auth_file}: ${auth_owner_mode:-<unknown>}"
+    fi
+  else
     verify_warn "authorized_keys missing: ${auth_file}"
-    return 0
   fi
 
-  auth_owner_mode="$(stat -c '%U:%G %a' "${auth_file}" 2>/dev/null || true)"
-  if [[ "${auth_owner_mode}" == "${ADMIN_USER}:${ADMIN_USER} 600" ]]; then
-    verify_ok "authorized_keys ownership and mode are correct: ${auth_file}"
+  key_count="$(count_valid_ssh_keys_in_file "${auth_file}")"
+  if [[ "${key_count}" -gt 0 ]]; then
+    verify_ok "Valid authorized_keys count for ${ADMIN_USER}: ${key_count}"
   else
-    verify_fail "authorized_keys ownership/mode mismatch for ${auth_file}: ${auth_owner_mode:-<unknown>}"
+    verify_warn "Valid authorized_keys count for ${ADMIN_USER}: ${key_count}"
+  fi
+
+  safe_gate_state="$(get_state "SSH_SAFE_GATE_PASSED" || true)"
+  if [[ "${safe_gate_state}" == "yes" ]]; then
+    verify_ok "SSH_SAFE_GATE_PASSED=${safe_gate_state}"
+  else
+    verify_warn "SSH_SAFE_GATE_PASSED=${safe_gate_state:-<unset>}"
+  fi
+
+  if [[ -n "${AUTHORIZED_KEYS_FILE:-}" && -f "${AUTHORIZED_KEYS_FILE}" && ! -f "${auth_file}" ]]; then
+    verify_warn "Configured AUTHORIZED_KEYS_FILE exists, but target authorized_keys is missing: ${AUTHORIZED_KEYS_FILE} -> ${auth_file}"
+  fi
+
+  fallback_source="$(bootstrap_authorized_keys_fallback_path)"
+  if [[ -z "${AUTHORIZED_KEYS_FILE:-}" && -f "${fallback_source}" && ! -f "${auth_file}" ]]; then
+    verify_warn "Fallback authorized_keys source exists, but target authorized_keys is missing: ${fallback_source} -> ${auth_file}"
   fi
 }
 
@@ -260,6 +319,9 @@ main() {
 
   local warnings=0
   local failures=0
+
+  verify_active_config_chain
+  verify_configured_runtime_values
 
   if is_debian12; then
     verify_ok "Debian 12 detected"
@@ -326,7 +388,7 @@ main() {
   verify_admin_can_read_project_bootstrap
   verify_admin_sudo_behavior
   verify_sshd_effective_settings
-  verify_admin_ssh_permissions
+  verify_admin_authorized_keys_target
 
   set_state "VERIFY_WARNINGS" "${warnings}"
   set_state "VERIFY_FAILURES" "${failures}"

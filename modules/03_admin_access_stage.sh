@@ -53,8 +53,7 @@ stage_intro_body() {
 3. 执行 SSH 接入准备
 
 这一阶段不会最终关闭 root 远程登录，而是为后续切换做准备。
-执行完成后，后续登录方式将优先变成"管理用户 + SSH 公钥"。
-如果公钥文件没有准备正确，后续可能无法正常连接。
+如果公钥没有成功安装到目标账户，后续仍不满足最终收口条件。
 EOF
 }
 
@@ -88,9 +87,17 @@ EOF
 
 stage_connection_summary() {
   local effective_port=""
+  local auth_ready="no"
+  local safe_gate_state=""
   effective_port="$(effective_ssh_port_for_changes)"
+  safe_gate_state="$(get_state "SSH_SAFE_GATE_PASSED" || true)"
 
-  cat <<EOF
+  if [[ -n "${ADMIN_USER:-}" ]] && admin_authorized_keys_ready_for_user "${ADMIN_USER}"; then
+    auth_ready="yes"
+  fi
+
+  if [[ "${auth_ready}" == "yes" && "${safe_gate_state}" == "yes" ]]; then
+    cat <<EOF
 管理用户接入阶段已完成。
 
 请按下面方式准备下一次连接：
@@ -104,6 +111,23 @@ stage_connection_summary() {
 如果你配置的目标端口不是 ${effective_port}，说明端口切换还在等待确认；
 请先确认云厂商安全组/云防火墙已经同步放行，再继续验证和收口。
 EOF
+    return 0
+  fi
+
+  cat <<EOF
+管理用户接入阶段已完成，但当前还不能按“最终收口”继续推进。
+
+当前状态：
+- 用户名：${ADMIN_USER:-<未设置>}
+- SSH 端口：${effective_port}
+- 目标账户公钥已安装：${auth_ready}
+- SSH safe gate：${safe_gate_state:-no}
+
+结论：
+- 管理用户已创建，但公钥尚未安装到目标账户 / 当前未满足最终收口条件
+- 请先修复目标账户 ${ADMIN_USER:-<未设置>} 的 authorized_keys，再重新执行第 4 步验证
+- 在确认新连接可用前，不要继续执行关闭 root 远程登录的收口步骤
+EOF
 }
 
 main() {
@@ -112,6 +136,11 @@ main() {
   module_banner "03_admin_access_stage" "创建并配置管理用户接入"
   require_root
   require_debian12
+
+  log info "ACTIVE_CONFIG_CHAIN=${ACTIVE_CONFIG_CHAIN:-<unset>}"
+  log info "ADMIN_USER=${ADMIN_USER:-<unset>}"
+  log info "AUTHORIZED_KEYS_FILE=${AUTHORIZED_KEYS_FILE:-<empty>}"
+  log info "SSH_PORT=${SSH_PORT:-<unset>}"
 
   confirm_stage_checkpoint "管理用户与 SSH 接入阶段" "$(stage_intro_body)" || die "管理用户与 SSH 接入阶段已取消。"
 

@@ -29,14 +29,22 @@ main() {
 
   local password_auth="yes"
   local kbd_auth="yes"
+  local safe_gate_passed="no"
+
+  if [[ -n "${ADMIN_USER}" ]] && id -u "${ADMIN_USER}" >/dev/null 2>&1 && admin_authorized_keys_ready_for_user "${ADMIN_USER}"; then
+    safe_gate_passed="yes"
+  fi
+
+  set_state "SSH_SAFE_GATE_PASSED" "${safe_gate_passed}"
+
   if is_true "${DISABLE_PASSWORD_LOGIN}"; then
-    if can_disable_password_login "${ADMIN_USER}"; then
+    if [[ "${safe_gate_passed}" == "yes" ]]; then
       password_auth="no"
       kbd_auth="no"
       log info "Safe gate passed. Password-based SSH login will be disabled."
     else
       log warn "Safe gate not passed. Password login will remain enabled."
-      log warn "Required: admin user exists and at least one valid authorized_keys entry is present."
+      log warn "Required: admin user exists and the target authorized_keys is installed with at least one valid public key."
     fi
   fi
 
@@ -81,6 +89,7 @@ EOF
   set_state "SSH_PORT_CHANGE_CONFIRMED" "${CONFIRM_SSH_PORT_CHANGE}"
   set_state "SSH_PASSWORD_LOGIN" "${password_auth}"
   set_state "ROOT_SSH_MODE" "${permit_root_login}"
+  log info "SSH_SAFE_GATE_PASSED=${safe_gate_passed}"
   log info "Root 远程 SSH 登录在本阶段仍保持可用；请先验证管理用户可登录，第 5 步才会正式关闭 root 远程登录。"
 
   if [[ "${requested_port}" != "${applied_port}" ]]; then
