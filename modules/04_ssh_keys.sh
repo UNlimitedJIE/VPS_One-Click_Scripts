@@ -19,19 +19,30 @@ source "${SCRIPT_DIR}/../lib/common.sh"
 source "${SCRIPT_DIR}/../lib/ui.sh"
 
 _AUTHORIZED_KEYS_PASTED_SOURCE_FILE="${_AUTHORIZED_KEYS_PASTED_SOURCE_FILE:-}"
+_AUTHORIZED_KEYS_RESOLVED_SOURCE_FILE="${_AUTHORIZED_KEYS_RESOLVED_SOURCE_FILE:-}"
+_AUTHORIZED_KEYS_CAPTURED_SOURCE_FILE="${_AUTHORIZED_KEYS_CAPTURED_SOURCE_FILE:-}"
 
 fail_authorized_keys_install() {
+  local failure_message="$*"
+
   set_state "AUTHORIZED_KEYS_PRESENT" "no"
   set_state "AUTHORIZED_KEYS_COUNT" "0"
-  die "$*"
+  if is_false "${PLAN_ONLY:-false}" && is_false "${DRY_RUN:-false}" && ui_is_interactive; then
+    ui_show_plain_and_wait \
+      "第 4.4 段 目标账户 authorized_keys 安装失败" \
+      "${failure_message}" \
+      "按回车退出当前步骤："
+  fi
+  die "${failure_message}"
 }
 
 resolve_authorized_keys_source() {
   local preferred_source=""
 
+  _AUTHORIZED_KEYS_RESOLVED_SOURCE_FILE=""
   preferred_source="$(preferred_authorized_keys_source_path)"
   if [[ -f "${preferred_source}" && "$(count_valid_ssh_keys_in_file "${preferred_source}")" -gt 0 ]]; then
-    printf '%s\n' "${preferred_source}"
+    _AUTHORIZED_KEYS_RESOLVED_SOURCE_FILE="${preferred_source}"
     return 0
   fi
 
@@ -106,12 +117,13 @@ show_source_write_result_and_wait() {
 }
 
 show_target_install_result_and_wait() {
-  local auth_file="$1"
-  local key_count="$2"
+  local source_file="$1"
+  local auth_file="$2"
+  local key_count="$3"
 
   ui_show_plain_and_wait \
     "第 4.4 段 目标账户 authorized_keys 安装结果" \
-    "已安装到目标账户 authorized_keys。\n目标文件：${auth_file}\n有效公钥数量：${key_count}" \
+    "源文件路径：${source_file}\n目标文件路径：${auth_file}\n目标文件安装结果：success\n有效公钥数量：${key_count}" \
     "按回车继续："
 }
 
@@ -123,6 +135,7 @@ capture_authorized_keys_source_via_paste() {
   local key_count="0"
 
   _AUTHORIZED_KEYS_PASTED_SOURCE_FILE=""
+  _AUTHORIZED_KEYS_CAPTURED_SOURCE_FILE=""
   source_file="$(preferred_authorized_keys_source_path)"
   source_dir="$(dirname "${source_file}")"
 
@@ -171,10 +184,10 @@ capture_authorized_keys_source_via_paste() {
         apply_managed_file "${source_file}" "0644" "${pasted_key}" "false"
         AUTHORIZED_KEYS_FILE="${source_file}"
         _AUTHORIZED_KEYS_PASTED_SOURCE_FILE="${source_file}"
+        _AUTHORIZED_KEYS_CAPTURED_SOURCE_FILE="${source_file}"
         export_config
         key_count="$(count_valid_ssh_keys_in_file "${source_file}")"
         show_source_write_result_and_wait "${source_file}" "${key_count}"
-        printf '%s\n' "${source_file}"
         return 0
         ;;
     esac
@@ -276,7 +289,6 @@ main() {
   local auth_file=""
   local source_file=""
   local key_count="0"
-  local pasted_now="no"
 
   home_dir="$(home_dir_for_user "${ADMIN_USER}")"
   ssh_dir="${home_dir}/.ssh"
@@ -284,11 +296,13 @@ main() {
 
   log info "Stage 4.4 authorized_keys target file: ${auth_file}"
 
-  source_file="$(resolve_authorized_keys_source || true)"
+  if resolve_authorized_keys_source; then
+    source_file="${_AUTHORIZED_KEYS_RESOLVED_SOURCE_FILE}"
+  fi
+
   if [[ -z "${source_file}" ]]; then
-    source_file="$(capture_authorized_keys_source_via_paste "${auth_file}" || true)"
-    if [[ -n "${_AUTHORIZED_KEYS_PASTED_SOURCE_FILE}" ]]; then
-      pasted_now="yes"
+    if capture_authorized_keys_source_via_paste "${auth_file}"; then
+      source_file="${_AUTHORIZED_KEYS_CAPTURED_SOURCE_FILE}"
     fi
   fi
 
@@ -313,9 +327,9 @@ main() {
 
   install_authorized_keys_to_target "${source_file}" "${ssh_dir}" "${auth_file}"
 
-  if [[ "${pasted_now}" == "yes" ]] && is_false "${PLAN_ONLY}" && is_false "${DRY_RUN}"; then
+  if ui_is_interactive && is_false "${PLAN_ONLY}" && is_false "${DRY_RUN}"; then
     key_count="$(admin_authorized_keys_count_for_user "${ADMIN_USER}")"
-    show_target_install_result_and_wait "${auth_file}" "${key_count}"
+    show_target_install_result_and_wait "${source_file}" "${auth_file}" "${key_count}"
   fi
 }
 

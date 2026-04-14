@@ -18,9 +18,12 @@ main() {
 
   apt_install_packages openssh-server
 
-  local target_password_auth="no"
-  local target_pubkey_auth="yes"
-  local target_kbd_auth="no"
+  local desired_password_auth="no"
+  local desired_pubkey_auth="yes"
+  local desired_kbd_auth="no"
+  local applied_password_auth="yes"
+  local applied_pubkey_auth="yes"
+  local applied_kbd_auth="no"
   local current_password_auth="unknown"
   local current_pubkey_auth="unknown"
   local current_kbd_auth="unknown"
@@ -51,8 +54,8 @@ main() {
   fi
 
   if is_false "${DISABLE_PASSWORD_LOGIN}"; then
-    target_password_auth="yes"
-    target_kbd_auth="no"
+    desired_password_auth="yes"
+    desired_kbd_auth="no"
   fi
 
   cutover_state="$(get_state "ADMIN_LOGIN_CUTOVER" || true)"
@@ -68,14 +71,17 @@ main() {
     warn_ssh_port_change_not_confirmed
   fi
 
-  if [[ "${target_password_auth}" == "no" && "${safe_gate_passed}" != "yes" ]]; then
-    sshd_apply_managed_settings "${applied_port}" "yes" "yes" "no" "${permit_root_login}"
+  if [[ "${safe_gate_passed}" == "yes" && "${desired_password_auth}" == "no" ]]; then
+    applied_password_auth="no"
+  fi
+
+  log info "Writing SSH policy for this stage: PubkeyAuthentication=${applied_pubkey_auth}, PasswordAuthentication=${applied_password_auth}, KbdInteractiveAuthentication=${applied_kbd_auth}, PermitRootLogin=${permit_root_login}, Port=${applied_port}"
+  sshd_apply_managed_settings "${applied_port}" "${applied_pubkey_auth}" "${applied_password_auth}" "${applied_kbd_auth}" "${permit_root_login}"
+
+  if [[ "${safe_gate_passed}" != "yes" ]]; then
     log info "Safe gate not passed yet. SSH will stay in transitional mode: PubkeyAuthentication=yes, PasswordAuthentication=yes, KbdInteractiveAuthentication=no."
-  else
-    sshd_apply_managed_settings "${applied_port}" "yes" "${target_password_auth}" "${target_kbd_auth}" "${permit_root_login}"
-    if [[ "${target_password_auth}" == "no" ]]; then
-      log info "Safe gate passed. SSH password login will now be disabled."
-    fi
+  elif [[ "${applied_password_auth}" == "no" ]]; then
+    log info "Safe gate passed. SSH password login will now be disabled."
   fi
 
   validate_sshd_config
@@ -97,9 +103,12 @@ main() {
   set_state "SSH_PORT_RUNTIME_EFFECTIVE" "${runtime_port}"
   set_state "SSH_TARGET_PORT_LISTENING" "${target_port_listening}"
   set_state "SSH_PORT_CHANGE_CONFIRMED" "${CONFIRM_SSH_PORT_CHANGE}"
-  set_state "SSH_AUTH_TARGET_PASSWORD" "${target_password_auth}"
-  set_state "SSH_AUTH_TARGET_PUBKEY" "${target_pubkey_auth}"
-  set_state "SSH_AUTH_TARGET_KBD" "${target_kbd_auth}"
+  set_state "SSH_AUTH_TARGET_PASSWORD" "${desired_password_auth}"
+  set_state "SSH_AUTH_TARGET_PUBKEY" "${desired_pubkey_auth}"
+  set_state "SSH_AUTH_TARGET_KBD" "${desired_kbd_auth}"
+  set_state "SSH_AUTH_APPLIED_PASSWORD" "${applied_password_auth}"
+  set_state "SSH_AUTH_APPLIED_PUBKEY" "${applied_pubkey_auth}"
+  set_state "SSH_AUTH_APPLIED_KBD" "${applied_kbd_auth}"
   set_state "SSH_AUTH_CURRENT_PASSWORD" "${current_password_auth}"
   set_state "SSH_AUTH_CURRENT_PUBKEY" "${current_pubkey_auth}"
   set_state "SSH_AUTH_CURRENT_KBD" "${current_kbd_auth}"
@@ -114,8 +123,10 @@ main() {
   step5_ready_state="$(ssh_stage5_ready_state_for_user "${ADMIN_USER}")"
   set_state "SSH_STAGE5_READY" "${step5_ready_state}"
 
-  log info "SSH target policy: publickey=$(ssh_policy_enabled_disabled_label "${target_pubkey_auth}"), password=$(ssh_policy_enabled_disabled_label "${target_password_auth}"), keyboard-interactive=$(ssh_policy_enabled_disabled_label "${target_kbd_auth}")"
+  log info "SSH desired target policy: publickey=$(ssh_policy_enabled_disabled_label "${desired_pubkey_auth}"), password=$(ssh_policy_enabled_disabled_label "${desired_password_auth}"), keyboard-interactive=$(ssh_policy_enabled_disabled_label "${desired_kbd_auth}")"
+  log info "SSH applied policy for this stage: publickey=$(ssh_policy_enabled_disabled_label "${applied_pubkey_auth}"), password=$(ssh_policy_enabled_disabled_label "${applied_password_auth}"), keyboard-interactive=$(ssh_policy_enabled_disabled_label "${applied_kbd_auth}")"
   log info "SSH actual policy after reload: pubkey=$(ssh_policy_enabled_disabled_label "${current_pubkey_auth}"), password=$(ssh_policy_enabled_disabled_label "${current_password_auth}"), keyboard-interactive=$(ssh_policy_enabled_disabled_label "${current_kbd_auth}")"
+  log info "sshd -T actual values: pubkeyauthentication=${current_pubkey_auth}, passwordauthentication=${current_password_auth}, kbdinteractiveauthentication=${current_kbd_auth}, permitrootlogin=${current_root_auth}, port=${runtime_port}"
   log info "SSH actual permitrootlogin after reload: $(ssh_policy_enabled_disabled_label "${current_root_auth}")"
   log info "SSH safe gate: ${safe_gate_passed} (${safe_gate_reason})"
   log info "Target user authorized_keys readiness: ${target_keys_ready}"
