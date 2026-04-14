@@ -8,6 +8,8 @@ source "${SCRIPT_DIR}/lib/common.sh"
 # shellcheck source=lib/ui.sh
 source "${SCRIPT_DIR}/lib/ui.sh"
 
+MENU_NAV_ACTION=""
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -484,19 +486,6 @@ render_init_menu_prompt() {
   local line=""
   local step_no module_id entry_phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh
 
-  header="$(cat <<'EOF'
-初始化步骤列表
-0. 返回上一级菜单
-99. 从第 2 步开始顺序执行到指定步骤
-
-输入规则：
-- 输入单个数字，例如 6，直接执行第 6 步
-- 输入多个数字，例如 1,2,3，按输入顺序执行这些步骤
-- 输入 99，进入“从第 2 步开始顺序执行到指定步骤”模式
-
-EOF
-)"
-
   while IFS= read -r line; do
     IFS=$'\t' read -r step_no module_id entry_phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh <<<"${line}"
     header+="${step_no}. ${title_zh}"
@@ -507,6 +496,14 @@ EOF
     header+="   ${short_desc_zh}"$'\n'
   done < <(registry_lines "init")
 
+  header+=$'99. 从第 2 步开始顺序执行到指定步骤\n'
+  header+=$'   从第 2 步起，按顺序执行到你指定的目标步骤。\n'
+  header+=$'0. 返回上一级菜单\n\n'
+  header+=$'输入规则：\n'
+  header+=$'- 输入单个数字，例如 6，直接执行第 6 步\n'
+  header+=$'- 输入多个数字，例如 2,3,4，按输入顺序执行这些步骤\n'
+  header+=$'- 输入 99，进入“从第 2 步开始顺序执行到指定步骤”模式\n'
+
   printf '%s' "${header}"
 }
 
@@ -514,19 +511,6 @@ render_maintain_menu_prompt() {
   local header=""
   local line=""
   local step_no module_id entry_phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh
-
-  header="$(cat <<'EOF'
-长期维护主菜单
-0. 返回上一级菜单
-
-输入规则：
-- 输入单个数字直接执行对应项目
-- 输入多个数字，例如 1,3,5，按输入顺序执行这些项目
-- 输入 9，顺序执行 1 到 8
-- 输入 10，进入谨慎操作子菜单
-
-EOF
-)"
 
   while IFS= read -r line; do
     IFS=$'\t' read -r step_no module_id entry_phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh <<<"${line}"
@@ -542,6 +526,12 @@ EOF
   header+=$'   先展示 1 到 8 的清单，确认后按顺序执行。\n'
   header+=$'10. 谨慎操作入口\n'
   header+=$'   进入 10.1 到 10.10 的谨慎操作子菜单。\n'
+  header+=$'0. 返回上一级菜单\n\n'
+  header+=$'输入规则：\n'
+  header+=$'- 输入单个数字直接执行对应项目\n'
+  header+=$'- 输入多个数字，例如 1,2,3，按输入顺序执行这些项目\n'
+  header+=$'- 输入 9，顺序执行 1 到 8\n'
+  header+=$'- 输入 10，进入谨慎操作子菜单\n'
 
   printf '%s' "${header}"
 }
@@ -549,25 +539,11 @@ EOF
 render_cautious_menu_prompt() {
   local header=""
   local line=""
-  local index=0
   local step_no module_id entry_phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh
 
-  header="$(cat <<'EOF'
-谨慎操作子菜单
-0. 返回上一级菜单
-
-输入规则：
-- 输入单个数字，例如 2，执行 10.2
-- 也可以输入完整编号，例如 10.2
-- 可输入多个编号，例如 2,10 或 10.2,10.10
-
-EOF
-)"
-
   while IFS= read -r line; do
-    index=$((index + 1))
     IFS=$'\t' read -r step_no module_id entry_phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh <<<"${line}"
-    header+="${step_no}. ${title_zh}"
+    header+="${step_no} ${title_zh}"
     if [[ "${risk_level}" == "high" ]]; then
       header+=" 【高风险】"
     fi
@@ -575,15 +551,21 @@ EOF
     header+="   ${short_desc_zh}"$'\n'
   done < <(registry_lines "cautious")
 
+  header+=$'0. 返回上一级菜单\n\n'
+  header+=$'输入规则：\n'
+  header+=$'- 输入单个数字，例如 2，执行 10.2\n'
+  header+=$'- 也可以输入完整编号，例如 10.2\n'
+  header+=$'- 可输入多个编号，例如 2,10 或 10.2,10.10\n'
+
   printf '%s' "${header}"
 }
 
 prompt_init_execution_input() {
-  ui_prompt_input "初始化快速执行" "$(render_init_menu_prompt)"
+  ui_prompt_input "初始化菜单" "$(render_init_menu_prompt)"
 }
 
 prompt_maintain_execution_input() {
-  ui_prompt_input "长期维护快速执行" "$(render_maintain_menu_prompt)"
+  ui_prompt_input "长期维护菜单" "$(render_maintain_menu_prompt)"
 }
 
 prompt_cautious_execution_input() {
@@ -596,9 +578,16 @@ prompt_init_sequence_selection() {
 
   while true; do
     local target_step=""
-    target_step="$(ui_prompt_input "顺序执行模式" "请输入目标步骤号。\n0 = 返回上一级菜单\n有效范围：2-${max_step}\n\n说明：将从第 2 步开始，按顺序一直执行到你输入的步骤号。" || true)"
-    [[ -n "${target_step}" ]] || return 1
-    target_step="$(printf '%s' "${target_step}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    local target_step_num=0
+    if ! ui_prompt_input "顺序执行模式" "请输入目标步骤号。\n0 = 返回上一级菜单\n有效范围：2-${max_step}\n\n说明：将从第 2 步开始，按顺序一直执行到你输入的步骤号。"; then
+      return 1
+    fi
+    target_step="$(ui_trim_value "${UI_LAST_INPUT}")"
+
+    if [[ -z "${target_step}" ]]; then
+      ui_warn_message "输入为空" "请输入 2 到 ${max_step} 之间的目标步骤号；输入 0 返回上一级菜单。"
+      continue
+    fi
 
     if [[ "${target_step}" == "0" ]]; then
       return 1
@@ -609,13 +598,15 @@ prompt_init_sequence_selection() {
       continue
     fi
 
-    if (( target_step < 2 || target_step > max_step )); then
+    target_step_num=$((10#${target_step}))
+
+    if (( target_step_num < 2 || target_step_num > max_step )); then
       ui_warn_message "输入无效" "目标步骤号必须在 2 到 ${max_step} 之间；输入 0 返回上一级菜单。"
       continue
     fi
 
     local sequence_ids=()
-    mapfile -t sequence_ids < <(build_init_sequence_to_step "${target_step}")
+    mapfile -t sequence_ids < <(build_init_sequence_to_step "${target_step_num}")
     ((${#sequence_ids[@]} > 0)) || {
       ui_warn_message "无法执行" "没有找到可执行的步骤范围，请检查模块注册表。"
       return 1
@@ -720,11 +711,19 @@ run_cautious_modules() {
 menu_init_phase() {
   while true; do
     local raw_input=""
-    raw_input="$(prompt_init_execution_input || true)"
-    [[ -n "${raw_input}" ]] || return 0
-    raw_input="$(printf '%s' "${raw_input}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    if ! prompt_init_execution_input; then
+      MENU_NAV_ACTION="back"
+      return 0
+    fi
+    raw_input="$(ui_trim_value "${UI_LAST_INPUT}")"
+
+    if [[ -z "${raw_input}" ]]; then
+      ui_warn_message "输入为空" "请输入步骤编号，例如 6、2,3,4 或 99。"
+      continue
+    fi
 
     if [[ "${raw_input}" == "0" ]]; then
+      MENU_NAV_ACTION="back"
       return 0
     fi
 
@@ -734,6 +733,7 @@ menu_init_phase() {
       ((${#sequence_ids[@]} > 0)) || continue
       ensure_runtime_initialized
       run_phase_from_registry "init" "${sequence_ids[@]}"
+      MENU_NAV_ACTION="done"
       return 0
     fi
 
@@ -771,6 +771,7 @@ menu_init_phase() {
 
     ensure_runtime_initialized
     run_phase_from_registry "init" "${normalized_selection[@]}"
+    MENU_NAV_ACTION="done"
     return 0
   done
 }
@@ -778,11 +779,19 @@ menu_init_phase() {
 menu_cautious_phase() {
   while true; do
     local raw_input=""
-    raw_input="$(prompt_cautious_execution_input || true)"
-    [[ -n "${raw_input}" ]] || return 0
-    raw_input="$(printf '%s' "${raw_input}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    if ! prompt_cautious_execution_input; then
+      MENU_NAV_ACTION="back"
+      return 0
+    fi
+    raw_input="$(ui_trim_value "${UI_LAST_INPUT}")"
+
+    if [[ -z "${raw_input}" ]]; then
+      ui_warn_message "输入为空" "请输入谨慎操作编号，例如 2、10.2 或 10.10。"
+      continue
+    fi
 
     if [[ "${raw_input}" == "0" ]]; then
+      MENU_NAV_ACTION="back"
       return 0
     fi
 
@@ -815,6 +824,7 @@ menu_cautious_phase() {
 
     ensure_runtime_initialized
     run_cautious_modules "${normalized_selection[@]}" || continue
+    MENU_NAV_ACTION="done"
     return 0
   done
 }
@@ -822,12 +832,20 @@ menu_cautious_phase() {
 menu_maintain_phase() {
   while true; do
     local raw_input=""
-    raw_input="$(prompt_maintain_execution_input || true)"
-    [[ -n "${raw_input}" ]] || return 0
-    raw_input="$(printf '%s' "${raw_input}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    if ! prompt_maintain_execution_input; then
+      MENU_NAV_ACTION="back"
+      return 0
+    fi
+    raw_input="$(ui_trim_value "${UI_LAST_INPUT}")"
+
+    if [[ -z "${raw_input}" ]]; then
+      ui_warn_message "输入为空" "请输入维护编号，例如 1、1,2,3、9 或 10。"
+      continue
+    fi
 
     case "${raw_input}" in
       0)
+        MENU_NAV_ACTION="back"
         return 0
         ;;
       9)
@@ -837,11 +855,16 @@ menu_maintain_phase() {
         confirm_maintain_sequence "${sequence_ids[@]}" || continue
         ensure_runtime_initialized
         run_phase_from_registry "maintain" "${sequence_ids[@]}"
+        MENU_NAV_ACTION="done"
         return 0
         ;;
       10)
         menu_cautious_phase
-        continue
+        if [[ "${MENU_NAV_ACTION:-}" == "back" ]]; then
+          continue
+        fi
+        MENU_NAV_ACTION="done"
+        return 0
         ;;
     esac
 
@@ -879,6 +902,7 @@ menu_maintain_phase() {
 
     ensure_runtime_initialized
     run_phase_from_registry "maintain" "${normalized_selection[@]}"
+    MENU_NAV_ACTION="done"
     return 0
   done
 }
@@ -903,9 +927,17 @@ menu_root() {
   local initial_phase="${1:-}"
   local current_phase="${initial_phase}"
 
+  if ! ui_require_interactive; then
+    printf '%s\n' "menu mode requires an interactive terminal or /dev/tty." >&2
+    return 1
+  fi
+
   while true; do
     if [[ -z "${current_phase}" ]]; then
-      current_phase="$(ui_choose_phase "init" || true)"
+      if ! ui_choose_phase "init"; then
+        return 0
+      fi
+      current_phase="${UI_LAST_INPUT}"
     fi
 
     case "${current_phase}" in
@@ -913,11 +945,14 @@ menu_root() {
         return 0
         ;;
       init|maintain)
+        MENU_NAV_ACTION=""
         menu_phase "${current_phase}"
-        if [[ -n "${initial_phase}" ]]; then
-          return 0
+        if [[ "${MENU_NAV_ACTION:-}" == "back" ]]; then
+          current_phase=""
+          initial_phase=""
+          continue
         fi
-        current_phase=""
+        return 0
         ;;
       *)
         die "Unsupported menu phase: ${current_phase}"
