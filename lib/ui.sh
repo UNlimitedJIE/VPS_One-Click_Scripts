@@ -238,3 +238,46 @@ ui_choose_phase() {
     esac
   done
 }
+
+# Read a secret value with hidden input.
+# Uses whiptail passwordbox if available, otherwise read -s via tty.
+# Result is stored in UI_LAST_SECRET. Never printed or logged.
+# Returns 1 if interactive input is unavailable.
+ui_read_secret() {
+  local title="${1:-}"
+  local prompt="${2:-}"
+
+  UI_LAST_SECRET=""
+
+  if ui_use_whiptail; then
+    local result=""
+    result="$(
+      whiptail \
+        --title "${title}" \
+        --passwordbox "${prompt}" 12 78 "" \
+        3>&1 1>&2 2>&3
+    )" || return 1
+    UI_LAST_SECRET="${result}"
+    return 0
+  fi
+
+  ui_require_interactive || return 1
+
+  ui_print_raw "\n${title}\n\n${prompt}\n"
+  ui_print_raw "请输入（输入不会显示）："
+
+  local answer=""
+  if ui_open_tty; then
+    IFS= read -rs answer <"/dev/fd/${UI_TTY_FD}" || return 1
+    # Print newline after hidden input
+    printf '\n' >"/dev/fd/${UI_TTY_FD}"
+  elif [[ -t 0 ]]; then
+    IFS= read -rs answer || return 1
+    printf '\n' >&2
+  else
+    return 1
+  fi
+
+  UI_LAST_SECRET="${answer}"
+  return 0
+}
