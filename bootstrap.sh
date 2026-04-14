@@ -396,6 +396,122 @@ render_execution_summary() {
   printf '%s' "${output}"
 }
 
+init_module_requires_admin_user() {
+  case "${1:-}" in
+    03_admin_user|04_ssh_keys|05_ssh_hardening|11_verify|12_summary)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+init_selection_requires_admin_user() {
+  local module_id=""
+  for module_id in "$@"; do
+    init_module_requires_admin_user "${module_id}" && return 0
+  done
+  return 1
+}
+
+registry_line_requires_admin_user() {
+  local line="$1"
+  local step_no module_id phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh
+  IFS=$'\t' read -r step_no module_id phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh <<<"${line}"
+  [[ "${phase}" == "init" ]] || return 1
+  init_module_requires_admin_user "${module_id}"
+}
+
+module_path_requires_admin_user() {
+  local path="$1"
+  local module_name=""
+  module_name="$(basename "${path}")"
+  module_name="${module_name%.sh}"
+  init_module_requires_admin_user "${module_name}"
+}
+
+prompt_admin_user_value() {
+  local cancel_mode="${1:-command}"
+  local cancel_hint=""
+  local candidate=""
+  local validation_error=""
+
+  if [[ "${cancel_mode}" == "menu" ]]; then
+    cancel_hint="输入 0 返回上一级菜单。"
+  else
+    cancel_hint="输入 0 取消当前操作。"
+  fi
+
+  while true; do
+    if ! ui_prompt_input "管理用户名" "请输入要创建/使用的管理用户名（仅限字母、数字、下划线、短横线，且不能为 root）：\n${cancel_hint}"; then
+      return 1
+    fi
+
+    candidate="$(ui_trim_value "${UI_LAST_INPUT}")"
+    if [[ "${candidate}" == "0" ]]; then
+      return 1
+    fi
+
+    validation_error="$(admin_user_validation_error "${candidate}")"
+    if [[ -n "${validation_error}" ]]; then
+      ui_warn_message "输入无效" "${validation_error}"
+      continue
+    fi
+
+    printf '%s\n' "${candidate}"
+    return 0
+  done
+}
+
+prompt_admin_user_persist_choice() {
+  local username="$1"
+  local target_file=""
+  local answer=""
+
+  target_file="$(active_config_file_path)"
+
+  while true; do
+    if ! ui_prompt_input "保存管理用户名" "是否将该用户名写入 ${target_file} 作为后续默认值？\n请输入 yes 或 no：" "no"; then
+      return 0
+    fi
+
+    answer="$(ui_trim_value "${UI_LAST_INPUT}")"
+    case "${answer}" in
+      yes|YES|y|Y)
+        upsert_config_assignment "${target_file}" "ADMIN_USER" "${username}"
+        return 0
+        ;;
+      no|NO|n|N|""|0)
+        return 0
+        ;;
+      *)
+        ui_warn_message "输入无效" "请输入 yes 或 no；直接回车默认 no。"
+        ;;
+    esac
+  done
+}
+
+ensure_admin_user_for_execution() {
+  local cancel_mode="${1:-command}"
+  local username=""
+
+  if ! admin_user_needs_prompt "${ADMIN_USER:-}"; then
+    return 0
+  fi
+
+  if ! ui_require_interactive; then
+    die "当前 ADMIN_USER 为空或仍为默认值 ${DEFAULT_ADMIN_USER}。请使用交互式终端输入管理用户名，或在配置文件中设置 ADMIN_USER。"
+  fi
+
+  username="$(prompt_admin_user_value "${cancel_mode}" || true)"
+  [[ -n "${username}" ]] || return 1
+
+  set_runtime_admin_user "${username}"
+  prompt_admin_user_persist_choice "${username}"
+  return 0
+}
+
 menu_action_summary() {
   local phase="$1"
   shift || true
@@ -900,6 +1016,10 @@ run_cautious_modules() {
 }
 
 menu_init_phase() {
+  if ! ensure_admin_user_for_execution "menu"; then
+    return 0
+  fi
+
   while true; do
     local raw_input=""
     if ! prompt_init_execution_input; then
@@ -1142,6 +1262,9 @@ main() {
     init)
       RUN_MODE="init"
       prepare_context
+      if ! ensure_admin_user_for_execution "command"; then
+        return 0
+      fi
       ensure_runtime_initialized
       run_phase_from_registry "init"
       ;;
@@ -1155,14 +1278,25 @@ main() {
       [[ -n "${BOOTSTRAP_TARGET}" ]] || die "run mode requires a module name"
       RUN_MODE="run"
       prepare_context
-      ensure_runtime_initialized
       local line=""
       line="$(registry_find_line "${BOOTSTRAP_TARGET}" || true)"
       if [[ -n "${line}" ]]; then
+        if registry_line_requires_admin_user "${line}"; then
+          if ! ensure_admin_user_for_execution "command"; then
+            return 0
+          fi
+        fi
+        ensure_runtime_initialized
         run_module_from_registry_line "${line}"
       else
         local module_path=""
         module_path="$(resolve_module_path "${BOOTSTRAP_TARGET}")" || die "Module not found: ${BOOTSTRAP_TARGET}"
+        if module_path_requires_admin_user "${module_path}"; then
+          if ! ensure_admin_user_for_execution "command"; then
+            return 0
+          fi
+        fi
+        ensure_runtime_initialized
         run_script_path "${module_path}"
       fi
       ;;
@@ -1176,6 +1310,11 @@ main() {
         selected_init_ids=("${RESOLVED_INIT_STEP_IDS[@]}")
       fi
       ((${#selected_init_ids[@]} > 0)) || die "No init steps selected."
+      if init_selection_requires_admin_user "${selected_init_ids[@]}"; then
+        if ! ensure_admin_user_for_execution "command"; then
+          return 0
+        fi
+      fi
       ensure_runtime_initialized
       run_phase_from_registry "init" "${selected_init_ids[@]}"
       ;;
@@ -1199,6 +1338,11 @@ main() {
         [[ -n "${sequence_line}" ]] && sequence_ids+=("${sequence_line}")
       done < <(build_init_sequence_to_step "${target_step}")
       ((${#sequence_ids[@]} > 0)) || die "No init steps found for range 2-${target_step}."
+      if init_selection_requires_admin_user "${sequence_ids[@]}"; then
+        if ! ensure_admin_user_for_execution "command"; then
+          return 0
+        fi
+      fi
 
       local preview=""
       local confirmation_body=""
@@ -1270,6 +1414,9 @@ EOF
     preflight)
       RUN_MODE="preflight"
       load_config
+      if ! ensure_admin_user_for_execution "command"; then
+        return 0
+      fi
       run_preflight_checks || exit 1
       ;;
     menu)

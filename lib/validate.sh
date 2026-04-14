@@ -50,6 +50,37 @@ validate_ssh_port() {
   [[ -z "${error_message}" ]] || die "${error_message}"
 }
 
+admin_user_validation_error() {
+  local username=""
+  username="$(trim_surrounding_whitespace "${1:-}")"
+
+  if [[ -z "${username}" ]]; then
+    printf '%s\n' "管理用户名不能为空。"
+    return 0
+  fi
+
+  if [[ "${username}" == "root" ]]; then
+    printf '%s\n' "管理用户名不能为 root。"
+    return 0
+  fi
+
+  if (( ${#username} < 1 || ${#username} > 32 )); then
+    printf '%s\n' "管理用户名长度必须在 1 到 32 个字符之间。"
+    return 0
+  fi
+
+  if [[ ! "${username}" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    printf '%s\n' "管理用户名只能包含字母、数字、下划线和短横线。"
+    return 0
+  fi
+}
+
+admin_user_needs_prompt() {
+  local username=""
+  username="$(trim_surrounding_whitespace "${1:-${ADMIN_USER:-}}")"
+  [[ -z "${username}" || "${username}" == "${DEFAULT_ADMIN_USER:-ops}" ]]
+}
+
 trim_surrounding_whitespace() {
   local value="${1:-}"
   value="${value#"${value%%[![:space:]]*}"}"
@@ -120,8 +151,10 @@ count_valid_ssh_keys_in_file() {
 validate_config() {
   validate_ssh_port
 
-  if [[ -n "${ADMIN_USER}" && "${ADMIN_USER}" == "root" ]]; then
-    die "ADMIN_USER must not be root."
+  local admin_user_error=""
+  if [[ -n "${ADMIN_USER}" ]]; then
+    admin_user_error="$(admin_user_validation_error "${ADMIN_USER}")"
+    [[ -z "${admin_user_error}" ]] || die "${admin_user_error}"
   fi
 
   if [[ -n "${AUTHORIZED_KEYS_FILE}" && ! -f "${AUTHORIZED_KEYS_FILE}" ]]; then
@@ -202,14 +235,18 @@ run_preflight_checks() {
     preflight_add_issue warnings "当前不是 root 运行"
   fi
 
-  if [[ -z "${ADMIN_USER}" ]]; then
-    preflight_print_status "ERROR" "ADMIN_USER" "不能为空"
-    preflight_add_issue errors "ADMIN_USER 为空"
-  elif [[ "${ADMIN_USER}" == "root" ]]; then
-    preflight_print_status "ERROR" "ADMIN_USER" "不能为 root"
-    preflight_add_issue errors "ADMIN_USER 不能为 root"
+  if admin_user_needs_prompt "${ADMIN_USER}"; then
+    preflight_print_status "ERROR" "ADMIN_USER" "当前为空或仍为默认占位值，请先确定管理用户名"
+    preflight_add_issue errors "ADMIN_USER 尚未确定"
   else
-    preflight_print_status "OK" "ADMIN_USER" "当前配置为 ${ADMIN_USER}"
+    local admin_user_error=""
+    admin_user_error="$(admin_user_validation_error "${ADMIN_USER}")"
+    if [[ -n "${admin_user_error}" ]]; then
+      preflight_print_status "ERROR" "ADMIN_USER" "${admin_user_error}"
+      preflight_add_issue errors "${admin_user_error}"
+    else
+      preflight_print_status "OK" "ADMIN_USER" "当前配置为 ${ADMIN_USER}"
+    fi
   fi
 
   if [[ -z "${AUTHORIZED_KEYS_FILE}" ]]; then

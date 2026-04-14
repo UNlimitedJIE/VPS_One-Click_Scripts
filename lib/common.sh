@@ -14,10 +14,11 @@ source "${COMMON_DIR}/validate.sh"
 source "${COMMON_DIR}/apt.sh"
 
 set_default_config() {
+  DEFAULT_ADMIN_USER="${DEFAULT_ADMIN_USER:-ops}"
   TIMEZONE="${TIMEZONE:-UTC}"
   SSH_PORT="${SSH_PORT:-22}"
   CONFIRM_SSH_PORT_CHANGE="${CONFIRM_SSH_PORT_CHANGE:-false}"
-  ADMIN_USER="${ADMIN_USER:-ops}"
+  ADMIN_USER="${ADMIN_USER:-${DEFAULT_ADMIN_USER}}"
   ADMIN_USER_SHELL="${ADMIN_USER_SHELL:-/bin/bash}"
   ADMIN_USER_GROUPS="${ADMIN_USER_GROUPS:-sudo}"
   AUTHORIZED_KEYS_FILE="${AUTHORIZED_KEYS_FILE:-}"
@@ -59,6 +60,7 @@ load_config() {
   [[ -n "${CLI_PLAN_ONLY:-}" ]] && PLAN_ONLY="${CLI_PLAN_ONLY}"
   [[ -n "${CLI_DRY_RUN:-}" ]] && DRY_RUN="${CLI_DRY_RUN}"
   [[ -n "${CLI_CONFIG_FILE:-}" ]] && CONFIG_FILE="${CLI_CONFIG_FILE}"
+  [[ -n "${RUNTIME_ADMIN_USER_OVERRIDE:-}" ]] && ADMIN_USER="${RUNTIME_ADMIN_USER_OVERRIDE}"
 
   MODULE_REGISTRY_FILE="${MODULE_REGISTRY_FILE:-${PROJECT_ROOT}/config/module-registry.tsv}"
   STATE_DIR="${STATE_DIR:-${PROJECT_ROOT}/state}"
@@ -68,6 +70,7 @@ load_config() {
 
 export_config() {
   export PROJECT_ROOT CONFIG_FILE MODULE_REGISTRY_FILE STATE_DIR LOG_DIR CHANGE_LOG_FILE
+  export DEFAULT_ADMIN_USER RUNTIME_ADMIN_USER_OVERRIDE
   export TIMEZONE SSH_PORT CONFIRM_SSH_PORT_CHANGE
   export ADMIN_USER ADMIN_USER_SHELL ADMIN_USER_GROUPS AUTHORIZED_KEYS_FILE
   export DISABLE_PASSWORD_LOGIN DISABLE_ROOT_SSH_PASSWORD
@@ -93,6 +96,77 @@ init_runtime() {
 
   export RUN_ID LOG_FILE STATE_FILE STATE_FILE_IS_EPHEMERAL
   export_config
+}
+
+active_config_file_path() {
+  if [[ -n "${CONFIG_FILE:-}" ]]; then
+    printf '%s\n' "${CONFIG_FILE}"
+    return 0
+  fi
+
+  if [[ -n "${CLI_CONFIG_FILE:-}" ]]; then
+    printf '%s\n' "${CLI_CONFIG_FILE}"
+    return 0
+  fi
+
+  printf '%s\n' "${PROJECT_ROOT}/config/default.conf"
+}
+
+set_runtime_admin_user() {
+  local username="$1"
+  ADMIN_USER="${username}"
+  RUNTIME_ADMIN_USER_OVERRIDE="${username}"
+  export_config
+}
+
+upsert_config_assignment() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+  local assignment_line=""
+  local target_dir=""
+  local tmp_file=""
+
+  assignment_line="${key}=\"${value}\""
+
+  if is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
+    log info "[plan] write ${assignment_line} to ${file}"
+    return 0
+  fi
+
+  target_dir="$(dirname "${file}")"
+  install -d -m 0755 "${target_dir}"
+  tmp_file="$(mktemp "${target_dir}/.${key}.XXXXXX")"
+
+  if [[ -f "${file}" ]]; then
+    awk -v key="${key}" -v assignment_line="${assignment_line}" '
+      BEGIN { updated = 0 }
+      $0 ~ "^[[:space:]]*" key "=" {
+        if (!updated) {
+          print assignment_line
+          updated = 1
+        }
+        next
+      }
+      { print }
+      END {
+        if (!updated) {
+          print assignment_line
+        }
+      }
+    ' "${file}" >"${tmp_file}"
+
+    if cmp -s "${tmp_file}" "${file}"; then
+      rm -f "${tmp_file}"
+      log info "No change required: ${file}"
+      return 0
+    fi
+  else
+    printf '%s\n' "${assignment_line}" >"${tmp_file}"
+  fi
+
+  mv "${tmp_file}" "${file}"
+  log info "Config updated: ${file} (${assignment_line})"
 }
 
 cleanup_ephemeral_state() {
