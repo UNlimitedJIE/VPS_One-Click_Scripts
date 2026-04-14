@@ -1,0 +1,32 @@
+step_no	module_id	phase	title_zh	short_desc_zh	risk_level	default_enabled	depends_on	script_path	detail_zh
+1	00_nodequality	init	运行 NodeQuality 基线检测	执行固定的 NodeQuality 命令，对当前 VPS 做基础环境和网络质量检测。	medium	true	-	modules/00_nodequality.sh	该步骤会访问外部地址并运行固定基线命令，用于在初始化前先了解这台 VPS 的网络质量、基础环境和可疑配置情况，方便后续比对。
+2	01_detect_system	init	检查当前系统和机器基础信息	识别当前是否为 Debian 12，并收集主机名、内核、磁盘、内存等基础信息。	low	true	00_nodequality	modules/01_detect_system.sh	该步骤主要做只读检测，确认当前系统版本与基础硬件信息，帮助你判断后续初始化策略是否适配当前机器。
+3	02_update_base	init	更新系统并安装基础工具	刷新软件包索引、升级系统，并安装后续初始化依赖的基础工具。	medium	true	01_detect_system	modules/02_update_base.sh	该步骤会通过 apt 更新软件包索引，安装基础命令和依赖包，并应用保守型升级，让后续模块运行环境更完整。
+4	03_admin_user	init	创建日常管理账号并授予 sudo 权限	创建普通管理用户，后续尽量不直接使用 root 进行日常管理。	medium	true	02_update_base	modules/03_admin_user.sh	该步骤会创建管理账号、补充 sudo 组、准备 home 目录和 shell，目的是把日常管理操作逐步从 root 切换到普通管理用户。
+5	04_ssh_keys	init	为管理账号配置 SSH 公钥登录	把准备好的公钥写入管理用户的 authorized_keys，为后续收紧 SSH 做准备。	medium	true	03_admin_user	modules/04_ssh_keys.sh	该步骤会把你提前准备好的公钥写入管理用户目录，只有在确认至少存在有效公钥后，后面的 SSH 收紧动作才有安全前提。
+6	05_ssh_hardening	init	加固 SSH 登录方式和连接规则	根据配置收紧 SSH，例如切换端口、限制 root 密码登录，并在安全门通过后关闭密码登录。	high	true	03_admin_user,04_ssh_keys	modules/05_ssh_hardening.sh	这是高风险步骤。它会改 SSH drop-in 配置、做语法检查并 reload 服务；如果准备不充分，尤其是公钥未验证或端口切换未确认，可能导致远程连接失败。
+7	06_nftables	init	启用 nftables 防火墙并只放行必要端口	生成并启用基础防火墙规则，默认只允许 SSH 端口进入。	high	true	05_ssh_hardening	modules/06_nftables.sh	这是高风险步骤。它会将入站默认策略收紧为 drop，并只保留当前生效 SSH 端口；如果云防火墙、安全组和 SSH 端口未同步，可能导致无法连接。
+8	07_time_sync	init	配置时区和自动时间同步	设置系统时区，并启用 systemd-timesyncd 进行自动校时。	low	true	02_update_base	modules/07_time_sync.sh	该步骤会统一系统时间基础设置，减少日志时间漂移、证书校验异常和计划任务错时的问题。
+9	08_auto_updates	init	启用自动安全更新	安装并配置 unattended-upgrades，让系统自动安装安全更新。	medium	true	02_update_base	modules/08_auto_updates.sh	该步骤会启用 Debian 12 常见的自动安全更新机制，适合长期在线的 VPS，但你仍应保留定期人工审查。
+10	09_fail2ban	init	启用 Fail2Ban 防暴力破解	监控 SSH 登录失败记录，对多次尝试错误密码的来源进行临时封禁。	medium	true	05_ssh_hardening	modules/09_fail2ban.sh	该步骤会基于 SSH 日志做基础暴力破解防护，适合作为防火墙之外的第二层登录保护措施。
+11	10_swap	init	根据机器配置决定是否启用 swap	在小内存 VPS 上按策略创建并启用 swap，缓解内存不足问题。	medium	true	02_update_base	modules/10_swap.sh	该步骤会根据内存规模和配置决定是否创建 /swapfile。它不是性能优化万能药，但在小内存场景下可以降低因 OOM 导致服务直接被杀的风险。
+12	11_verify	init	执行初始化结果检查	检查 SSH、防火墙、时间同步、Fail2Ban、自动更新、swap 等关键状态是否已正确生效。	low	true	05_ssh_hardening,06_nftables,07_time_sync,08_auto_updates,09_fail2ban,10_swap	modules/11_verify.sh	该步骤不主动做高风险改动，主要用于把关键项目重新检查一遍，尽早发现初始化后仍未生效或仍有风险的地方。
+13	12_summary	init	输出初始化摘要和后续提醒	汇总当前系统状态，并提示下一步手动操作，例如验证 SSH、新建快照、记录配置。	low	true	11_verify	modules/12_summary.sh	该步骤会输出面向人阅读的初始化摘要，提醒你继续验证 SSH、新建快照、记录配置和后续按角色扩展服务端口。
+1	20_update_system	maintain	定期更新系统软件	刷新索引、安装系统更新，并清理不再需要的软件包。	medium	true	-	maintenance/20_update_system.sh	适合定期执行的保守型系统维护动作，用于减少系统落后版本积压，保持基础软件包处于较新状态。
+2	21_audit_users_ssh	maintain	审查用户、sudo 和 SSH 密钥	检查交互式用户、sudo 成员以及各用户 authorized_keys 情况。	medium	true	-	maintenance/21_audit_users_ssh.sh	该任务用于发现多余账号、遗留 sudo 权限和未审查的 SSH 公钥，适合在人员或运维方式发生变化后重点检查。
+3	22_audit_firewall	maintain	检查防火墙规则与实际服务	对照当前监听端口和 nftables 规则，检查是否存在暴露面与预期不一致的问题。	medium	true	-	maintenance/22_audit_firewall.sh	该任务用于发现“服务已经监听但你忘了开口子”或“端口本不该开放却仍在监听”的问题，适合每次业务变更后执行。
+4	23_audit_fail2ban_logs	maintain	检查 Fail2Ban 与登录日志	查看 Fail2Ban 状态和近期 SSH 登录失败情况。	medium	true	-	maintenance/23_audit_fail2ban_logs.sh	该任务用于判断最近是否存在异常登录尝试、误封、封禁效果不明显等情况，是 SSH 风险巡检的重要组成部分。
+5	24_monitor_basic	maintain	查看基础资源与服务健康	查看 CPU、内存、磁盘、网络套接字和失败的 systemd 服务。	low	true	-	maintenance/24_monitor_basic.sh	该任务用于快速了解机器的基本健康度，适合排查“机器卡顿”“磁盘满了”“服务异常退出”等常见问题。
+6	25_cleanup	maintain	清理日志和缓存	清理 apt 缓存、无用软件包和过旧 journal 日志。	low	true	20_update_system	maintenance/25_cleanup.sh	该任务用于减少无用占用，尤其适合磁盘较小的 VPS，但不会对业务数据目录做破坏性删除。
+7	26_backup_check	maintain	检查备份与恢复准备情况	检查常见备份工具、相关定时器和近期备份痕迹，并提醒做恢复演练。	medium	true	-	maintenance/26_backup_check.sh	该任务不会直接调用云厂商 API，也不会自动恢复数据；重点是提醒你验证“有没有备份”和“能不能真正恢复”。
+8	28_change_log	maintain	记录本次维护状态	把关键运行状态追加到变更记录中，方便后续追溯。	low	true	-	maintenance/28_change_log.sh	该任务会把当前系统的一些关键维护状态记录到 state/change-log.tsv，方便做长期对比和问题回溯。
+10.1	27_tuning_entry	cautious	保守型 sysctl / 网络调优入口	复用当前保守调优逻辑，默认不激进修改。	high	false	-	maintenance/27_tuning_entry.sh	该项会根据 SAFE_TUNING_PROFILE 决定是否写入 /etc/sysctl.d/99-vps-safe-tuning.conf。默认 profile 为 none 时不会改系统；只有明确启用 baseline 时才会写入保守网络硬化参数。
+10.2	30_ssh_usedns_no	cautious	SSH 连接加速：关闭 DNS 反向解析	为 sshd 设置 UseDNS no，减少部分环境中的连接等待。	medium	false	-	maintenance/cautious/30_ssh_usedns_no.sh	该项会写入 /etc/ssh/sshd_config.d/60-vps-cautious-usedns.conf 并 reload sshd。它通常能减少登录等待时间，但如果你的环境依赖反向 DNS 做审计或策略匹配，需要先确认影响。
+10.3	31_ssh_ciphers	cautious	SSH 加密算法配置	为 sshd 设置一组偏现代的 Ciphers 列表。	high	false	-	maintenance/cautious/31_ssh_ciphers.sh	该项会写入 /etc/ssh/sshd_config.d/61-vps-cautious-ciphers.conf 并 reload sshd。这是安全性与兼容性的折中项；过旧的 SSH 客户端可能因此无法连接。
+10.4	32_icmp_ping_control	cautious	ICMP / Ping 控制	通过 sysctl 关闭 IPv4 ping 回应，降低主机可见性。	medium	false	-	maintenance/cautious/32_icmp_ping_control.sh	该项会写入 /etc/sysctl.d/70-vps-cautious-icmp.conf，并设置 net.ipv4.icmp_echo_ignore_all = 1。禁 ping 不等于真正安全，只是降低可见性，也会影响基于 ping 的监控和排障。
+10.5	33_forwarding_switches	cautious	网络转发相关开关	明确关闭 IPv4/IPv6 转发，适合普通单机 VPS。	high	false	-	maintenance/cautious/33_forwarding_switches.sh	该项会写入 /etc/sysctl.d/71-vps-cautious-forwarding.conf，设置 ip_forward 与 IPv6 forwarding 为 0。如果这台机器承担路由、VPN 网关、容器桥接或转发职责，就不应随意执行。
+10.6	34_congestion_queue	cautious	拥塞控制与队列调优	为内核设置 fq + BBR，作为常见的吞吐调优组合。	high	false	-	maintenance/cautious/34_congestion_queue.sh	该项会写入 /etc/sysctl.d/72-vps-cautious-congestion.conf，设置 net.core.default_qdisc = fq 与 net.ipv4.tcp_congestion_control = bbr。只有在当前内核支持 BBR 时才会继续执行。
+10.7	35_tcp_buffers_backlog	cautious	TCP 缓冲与连接队列参数	设置 rmem / wmem / somaxconn / tcp_max_syn_backlog 等保守建议值。	high	false	-	maintenance/cautious/35_tcp_buffers_backlog.sh	该项会写入 /etc/sysctl.d/73-vps-cautious-buffers.conf，修改 socket buffer ceiling、连接队列和 SYN backlog 相关参数。这不是放之四海皆准的性能优化，必须结合真实负载验证。
+10.8	36_tcp_advanced_features	cautious	TCP 高级特性参数	管理 tcp_fastopen、timestamps、sack、window scaling 等参数。	high	false	-	maintenance/cautious/36_tcp_advanced_features.sh	该项会写入 /etc/sysctl.d/74-vps-cautious-tcp-advanced.conf。它可能改善某些场景，也可能和老旧客户端、中间盒或特定链路特性产生兼容性问题。
+10.9	37_kernel_memory_behavior	cautious	内核与内存行为参数	管理 kernel.panic、panic_on_oops、vm.swappiness 等参数。	high	false	-	maintenance/cautious/37_kernel_memory_behavior.sh	该项会写入 /etc/sysctl.d/75-vps-cautious-kernel-memory.conf。它会影响异常后的重启策略以及 swap 行为，应该先考虑业务类型、是否有高可用和当前内存压力。
+10.10	38_status_review	cautious	查看谨慎操作说明与当前状态	只读展示谨慎项当前状态、风险说明与建议，不改系统。	low	false	-	maintenance/cautious/38_status_review.sh	该项不会修改系统。它会读取 SSH 与 sysctl 当前状态，并提醒你：SSH 登录策略请回到初始化 SSH 模块统一管理；禁 ping 只是降低可见性，不等于真正安全。

@@ -1,0 +1,7 @@
+.DS_Store
+logs/
+state/
+config/local.conf
+*.bak
+*.tmp
+__MACOSX/
