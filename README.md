@@ -20,7 +20,7 @@ cd VPS_One-Click_Scripts
 bash bootstrap.sh show init
 bash bootstrap.sh plan init
 sudo bash bootstrap.sh init
-‘’‘
+```
 
 ## 设计目标
 
