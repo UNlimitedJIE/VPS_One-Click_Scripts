@@ -2,6 +2,7 @@
 set -euo pipefail
 
 UI_LAST_INPUT="${UI_LAST_INPUT:-}"
+UI_LAST_SECRET="${UI_LAST_SECRET:-}"
 UI_TTY_FD="${UI_TTY_FD:-}"
 UI_TTY_STATUS="${UI_TTY_STATUS:-unknown}"
 
