@@ -566,6 +566,277 @@ get_state() {
   grep "^${key}=" "${STATE_FILE}" | tail -n1 | cut -d= -f2-
 }
 
+module_completion_state_found() {
+  local module_id="${1:-}"
+
+  case "${module_id}" in
+    00_nodequality)
+      [[ -n "$(get_state "NODEQUALITY_DONE" || true)" ]]
+      ;;
+    01_detect_system)
+      [[ -n "$(get_state "DETECT_SYSTEM_DONE" || true)" ]]
+      ;;
+    02_update_base)
+      [[ -n "$(get_state "BASE_UPDATED" || true)" ]]
+      ;;
+    03_admin_access_stage)
+      [[ -n "$(get_state "AUTHORIZED_KEYS_PRESENT" || true)" || -n "$(get_state "SSH_SAFE_GATE_PASSED" || true)" || -n "$(get_state "AUTHORIZED_KEYS_COUNT" || true)" ]]
+      ;;
+    06_nftables)
+      [[ -n "$(get_state "NFTABLES_ENABLED" || true)" ]]
+      ;;
+    07_switch_admin_login)
+      [[ -n "$(get_state "ADMIN_LOGIN_CUTOVER" || true)" || -n "$(get_state "ROOT_SSH_MODE" || true)" ]]
+      ;;
+    07_time_sync)
+      [[ -n "$(get_state "TIMESYNCD_ENABLED" || true)" ]]
+      ;;
+    08_auto_updates)
+      [[ -n "$(get_state "AUTO_UPDATES_ENABLED" || true)" ]]
+      ;;
+    09_fail2ban)
+      [[ -n "$(get_state "FAIL2BAN_ENABLED" || true)" ]]
+      ;;
+    10_swap)
+      [[ -n "$(get_state "SWAP_ENABLED" || true)" ]]
+      ;;
+    11_verify)
+      [[ -n "$(get_state "VERIFY_FAILURES" || true)" || -n "$(get_state "VERIFY_WARNINGS" || true)" || -n "$(get_state "VERIFY_PENDING" || true)" ]]
+      ;;
+    20_update_system)
+      [[ -n "$(get_state "MAINT_LAST_UPDATE" || true)" ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+nodequality_prerequisite_conditions_satisfied() {
+  local tool=""
+  local os_name=""
+
+  if is_false "${ENABLE_NODEQUALITY:-true}"; then
+    return 0
+  fi
+
+  [[ -r "${PROJECT_ROOT}/bootstrap.sh" ]] || return 1
+  [[ -r "$(registry_file)" ]] || return 1
+
+  for tool in awk sed grep cut mktemp getent uname; do
+    command_exists "${tool}" || return 1
+  done
+
+  os_name="$(pretty_os_name 2>/dev/null || echo unknown)"
+  [[ -n "${os_name}" && "${os_name}" != "unknown" ]]
+}
+
+detect_system_prerequisite_conditions_satisfied() {
+  local detected_os=""
+  local detected_version=""
+  local pretty_name=""
+
+  detected_os="$(os_id 2>/dev/null || echo unknown)"
+  detected_version="$(os_version_id 2>/dev/null || echo unknown)"
+  pretty_name="$(pretty_os_name 2>/dev/null || echo unknown)"
+
+  [[ -n "${pretty_name}" && "${pretty_name}" != "unknown" ]] || return 1
+  [[ -n "${detected_os}" && "${detected_os}" != "unknown" ]] || return 1
+  [[ -n "${detected_version}" && "${detected_version}" != "unknown" ]] || return 1
+  is_debian12
+}
+
+update_base_prerequisite_conditions_satisfied() {
+  local pkg=""
+  local tool=""
+  local -a critical_packages=(
+    ca-certificates
+    curl
+    sudo
+    rsync
+    git
+    procps
+  )
+  local -a critical_tools=(
+    apt-get
+    dpkg
+    useradd
+    usermod
+    install
+    stat
+    visudo
+  )
+
+  detect_system_prerequisite_conditions_satisfied || return 1
+
+  for pkg in "${critical_packages[@]}"; do
+    package_installed "${pkg}" || return 1
+  done
+
+  for tool in "${critical_tools[@]}"; do
+    command_exists "${tool}" || return 1
+  done
+
+  return 0
+}
+
+admin_access_prerequisite_conditions_satisfied() {
+  [[ -n "${ADMIN_USER:-}" ]] || return 1
+  id -u "${ADMIN_USER}" >/dev/null 2>&1 || return 1
+  admin_authorized_keys_ready_for_user "${ADMIN_USER}" || return 1
+  command_exists sshd || return 1
+  sshd -t >/dev/null 2>&1
+}
+
+nftables_prerequisite_conditions_satisfied() {
+  if is_false "${ENABLE_NFTABLES:-true}"; then
+    return 0
+  fi
+
+  package_installed nftables || return 1
+  [[ -f "$(nftables_config_path)" ]] || return 1
+  service_enabled "nftables" || return 1
+  service_active "nftables"
+}
+
+admin_cutover_prerequisite_conditions_satisfied() {
+  root_ssh_login_disabled || return 1
+  [[ -n "${ADMIN_USER:-}" ]] || return 1
+  id -u "${ADMIN_USER}" >/dev/null 2>&1 || return 1
+  admin_authorized_keys_ready_for_user "${ADMIN_USER}" || return 1
+  command_exists sshd || return 1
+  sshd -t >/dev/null 2>&1
+}
+
+time_sync_prerequisite_conditions_satisfied() {
+  if is_false "${ENABLE_TIME_SYNC:-true}"; then
+    return 0
+  fi
+
+  package_installed systemd-timesyncd || return 1
+  service_enabled "systemd-timesyncd" || return 1
+  service_active "systemd-timesyncd"
+}
+
+auto_updates_prerequisite_conditions_satisfied() {
+  if is_false "${INSTALL_UNATTENDED_UPGRADES:-true}"; then
+    return 0
+  fi
+
+  package_installed unattended-upgrades || return 1
+  package_installed apt-listchanges || return 1
+  [[ -f /etc/apt/apt.conf.d/20auto-upgrades ]] || return 1
+  service_exists "unattended-upgrades" || return 1
+  service_enabled "unattended-upgrades" || return 1
+  service_active "unattended-upgrades"
+}
+
+fail2ban_prerequisite_conditions_satisfied() {
+  if is_false "${INSTALL_FAIL2BAN:-true}"; then
+    return 0
+  fi
+
+  package_installed fail2ban || return 1
+  [[ -f /etc/fail2ban/jail.d/sshd.local ]] || return 1
+  service_enabled "fail2ban" || return 1
+  service_active "fail2ban"
+}
+
+swap_prerequisite_conditions_satisfied() {
+  case "${ENABLE_SWAP:-auto}" in
+    false|FALSE|no|NO|off|OFF|0)
+      return 0
+      ;;
+  esac
+
+  if has_active_swap; then
+    return 0
+  fi
+
+  case "${ENABLE_SWAP:-auto}" in
+    auto|AUTO)
+      (( "$(memory_mb)" >= SWAP_AUTO_THRESHOLD_MB ))
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+verify_prerequisite_conditions_satisfied() {
+  command_exists sshd || return 1
+  sshd -t >/dev/null 2>&1 || return 1
+  [[ -n "${ADMIN_USER:-}" ]] || return 0
+  id -u "${ADMIN_USER}" >/dev/null 2>&1 || return 1
+  return 0
+}
+
+maintain_update_prerequisite_conditions_satisfied() {
+  detect_system_prerequisite_conditions_satisfied || return 1
+  command_exists apt-get || return 1
+  command_exists dpkg || return 1
+  [[ -d /var/lib/apt/lists ]] || return 1
+  return 0
+}
+
+module_prerequisite_conditions_satisfied() {
+  local module_id="${1:-}"
+
+  case "${module_id}" in
+    00_nodequality) nodequality_prerequisite_conditions_satisfied ;;
+    01_detect_system) detect_system_prerequisite_conditions_satisfied ;;
+    02_update_base) update_base_prerequisite_conditions_satisfied ;;
+    03_admin_access_stage) admin_access_prerequisite_conditions_satisfied ;;
+    06_nftables) nftables_prerequisite_conditions_satisfied ;;
+    07_switch_admin_login) admin_cutover_prerequisite_conditions_satisfied ;;
+    07_time_sync) time_sync_prerequisite_conditions_satisfied ;;
+    08_auto_updates) auto_updates_prerequisite_conditions_satisfied ;;
+    09_fail2ban) fail2ban_prerequisite_conditions_satisfied ;;
+    10_swap) swap_prerequisite_conditions_satisfied ;;
+    11_verify) verify_prerequisite_conditions_satisfied ;;
+    20_update_system) maintain_update_prerequisite_conditions_satisfied ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+dependency_assessment_status() {
+  local module_id="${1:-}"
+
+  if module_completion_state_found "${module_id}"; then
+    printf '%s\n' "completion_state_found"
+    return 0
+  fi
+
+  if module_prerequisite_conditions_satisfied "${module_id}"; then
+    printf '%s\n' "state_missing_but_conditions_satisfied"
+    return 0
+  fi
+
+  printf '%s\n' "prerequisite_conditions_not_satisfied"
+}
+
+registry_unique_dependencies() {
+  local phase="${1:-}"
+
+  registry_lines "${phase}" | awk -F '\t' '
+    {
+      deps = $8
+      if (deps == "" || deps == "-") {
+        next
+      }
+      count = split(deps, items, ",")
+      for (i = 1; i <= count; i++) {
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", items[i])
+        if (items[i] != "" && items[i] != "-" && !seen[items[i]]++) {
+          print items[i]
+        }
+      }
+    }
+  '
+}
+
 restart_service_if_exists() {
   local service_name="${1%.service}"
   service_exists "${service_name}" || {

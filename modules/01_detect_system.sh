@@ -42,6 +42,8 @@ main() {
   set_state "KERNEL" "${kernel}"
   set_state "ARCH" "${arch}"
   set_state "MEMORY_MB" "${mem}"
+  set_state "DETECT_SYSTEM_DONE" "done"
+  set_state "DETECT_SYSTEM_LAST_RUN" "$(date -Iseconds)"
 }
 
 main "$@"

@@ -126,6 +126,29 @@ verify_active_config_chain() {
   fi
 }
 
+verify_dependency_chain_state() {
+  local dependency=""
+  local assessment=""
+
+  while IFS= read -r dependency; do
+    [[ -n "${dependency}" ]] || continue
+    [[ "${dependency}" == "11_verify" ]] && continue
+
+    assessment="$(dependency_assessment_status "${dependency}")"
+    case "${assessment}" in
+      completion_state_found)
+        verify_ok "Dependency ${dependency}: completion state found"
+        ;;
+      state_missing_but_conditions_satisfied)
+        verify_pending "Dependency ${dependency}: completion state missing, but prerequisite conditions appear satisfied"
+        ;;
+      *)
+        verify_warn "Dependency ${dependency}: completion state missing and prerequisite conditions are not satisfied"
+        ;;
+    esac
+  done < <(registry_unique_dependencies "init")
+}
+
 verify_configured_runtime_values() {
   local target_keys_ready="no"
 
@@ -457,6 +480,7 @@ main() {
   local cutover_state=""
 
   verify_active_config_chain
+  verify_dependency_chain_state
   verify_project_copy_layout
   verify_configured_runtime_values
 

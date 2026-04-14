@@ -300,45 +300,23 @@ normalize_selection_list_safe() {
   printf '%s\n' "${normalized_ids[@]}"
 }
 
-base_prerequisites_look_satisfied() {
-  local base_updated=""
-  local pkg=""
-  local -a critical_packages=(
-    ca-certificates
-    curl
-    sudo
-    rsync
-    git
-    procps
-  )
-
-  base_updated="$(get_state "BASE_UPDATED" || true)"
-  [[ -n "${base_updated}" ]] && return 0
-
-  for pkg in "${critical_packages[@]}"; do
-    package_installed "${pkg}" || return 1
-  done
-
-  return 0
-}
-
 log_missing_dependency_notice() {
   local module_id="$1"
   local dependency="$2"
-  local base_updated=""
+  local assessment=""
 
-  if [[ "${dependency}" == "02_update_base" ]]; then
-    base_updated="$(get_state "BASE_UPDATED" || true)"
-    if [[ -n "${base_updated}" ]]; then
+  assessment="$(dependency_assessment_status "${dependency}")"
+  case "${assessment}" in
+    completion_state_found)
       return 0
-    fi
-    if base_prerequisites_look_satisfied; then
-      log info "Selected ${module_id} but missing explicit dependency ${dependency}; base prerequisites look satisfied, and explicit step-2 completion state was not found."
-      return 0
-    fi
-  fi
-
-  log warn "Selected ${module_id} but missing dependency ${dependency}. The script can still be run, but you should confirm prerequisites manually."
+      ;;
+    state_missing_but_conditions_satisfied)
+      log info "Selected ${module_id}: dependency state for ${dependency} was not found, but prerequisite conditions appear satisfied."
+      ;;
+    *)
+      log warn "Selected ${module_id} but missing dependency ${dependency}; prerequisite conditions are not satisfied, so you should confirm the risk before continuing."
+      ;;
+  esac
 }
 
 warn_missing_dependencies() {
