@@ -48,10 +48,61 @@ verify_shortcut_wrapper() {
   fi
   verify_ok "Shortcut exists and is executable: ${target}"
 
-  if grep -Fq '/opt/VPS_One-Click_Scripts' "${target}" && grep -Fq 'current_home="${HOME:-}"' "${target}" && grep -Fq '/root/VPS_One-Click_Scripts' "${target}" && grep -Fq 'config/local.conf' "${target}"; then
-    verify_ok "Shortcut wrapper includes runtime project discovery and local.conf logic"
+  if grep -Fq '/opt/VPS_One-Click_Scripts' "${target}" && grep -Fq 'current_home="${HOME:-}"' "${target}" && grep -Fq '/root/VPS_One-Click_Scripts' "${target}" && grep -Fq 'config/local.conf' "${target}" && grep -Fq '[j] Runtime project root:' "${target}" && grep -Fq 'Multiple project copies detected' "${target}"; then
+    verify_ok "Shortcut wrapper includes runtime project discovery, copy warning and local.conf logic"
   else
-    verify_fail "Shortcut wrapper is missing /opt, \$HOME, /root or local.conf discovery logic"
+    verify_fail "Shortcut wrapper is missing /opt, \$HOME, /root, copy warning or local.conf discovery logic"
+  fi
+}
+
+verify_project_copy_layout() {
+  local runtime_root=""
+  local current_dir=""
+  local active_root=""
+  local copy=""
+  local -a copies=()
+
+  runtime_root="$(discover_runtime_project_root || true)"
+  current_dir="$(pwd -P 2>/dev/null || pwd)"
+  active_root="${runtime_root:-${PROJECT_ROOT}}"
+
+  verify_ok "Current PROJECT_ROOT=${PROJECT_ROOT}"
+  verify_ok "Current shell directory=${current_dir}"
+
+  if [[ -n "${runtime_root}" ]]; then
+    verify_ok "Preferred runtime project root=${runtime_root}"
+  else
+    verify_warn "No readable runtime project root detected in /opt, \$HOME or /root"
+  fi
+
+  mapfile -t copies < <(list_detected_project_copies)
+  if ((${#copies[@]} == 0)); then
+    verify_warn "No project copies detected in /opt, \$HOME or /root"
+  else
+    verify_ok "Detected project copies: ${copies[*]}"
+  fi
+
+  if [[ -n "${runtime_root}" && "${PROJECT_ROOT}" != "${runtime_root}" ]]; then
+    verify_warn "Current execution root differs from the preferred runtime root: PROJECT_ROOT=${PROJECT_ROOT}, runtime=${runtime_root}"
+  fi
+
+  if [[ -n "${runtime_root}" && "${current_dir}" != "${runtime_root}" ]]; then
+    verify_warn "Current shell directory differs from the shortcut runtime root: cwd=${current_dir}, runtime=${runtime_root}"
+  fi
+
+  if ((${#copies[@]} > 1)); then
+    verify_warn "Multiple project copies detected. Active runtime copy: ${active_root}"
+    for copy in "${copies[@]}"; do
+      [[ "${copy}" == "${active_root}" ]] || verify_warn "Other project copy: ${copy}"
+    done
+    verify_warn "更新目录与运行目录可能不一致。"
+    if selection_contains "$(shared_project_root)" "${copies[@]}" && selection_contains "/root/VPS_One-Click_Scripts" "${copies[@]}"; then
+      verify_warn "Both /opt and /root project copies exist; keep $(shared_project_root) as the only runtime and maintenance directory."
+    fi
+  fi
+
+  if [[ "${active_root}" == "$(shared_project_root)" ]]; then
+    log info "[INFO] If the system has switched to /opt runtime, future git/grep/code edits should be done in $(shared_project_root)."
   fi
 }
 
@@ -102,6 +153,9 @@ verify_configured_runtime_values() {
 }
 
 verify_admin_can_read_project_bootstrap() {
+  local runtime_root=""
+  local target_root=""
+
   if [[ -z "${ADMIN_USER}" ]]; then
     verify_warn "ADMIN_USER is empty; skip project readability check"
     return 0
@@ -112,12 +166,15 @@ verify_admin_can_read_project_bootstrap() {
     return 0
   fi
 
-  if sudo -u "${ADMIN_USER}" test -r "${PROJECT_ROOT}/bootstrap.sh"; then
-    verify_ok "Admin user can read project bootstrap.sh: ${PROJECT_ROOT}/bootstrap.sh"
+  runtime_root="$(discover_runtime_project_root || true)"
+  target_root="${runtime_root:-${PROJECT_ROOT}}"
+
+  if sudo -u "${ADMIN_USER}" test -r "${target_root}/bootstrap.sh"; then
+    verify_ok "Admin user can read runtime bootstrap.sh: ${target_root}/bootstrap.sh"
   else
-    verify_warn "Admin user cannot read project bootstrap.sh: ${PROJECT_ROOT}/bootstrap.sh"
-    if project_root_requires_shared_copy; then
-      verify_warn "当前项目位于 /root，下次切换到管理用户后无法直接使用 j；应先迁移到 /opt/VPS_One-Click_Scripts 并重装 shortcut。"
+    verify_warn "Admin user cannot read runtime bootstrap.sh: ${target_root}/bootstrap.sh"
+    if [[ "${target_root}" == /root/* ]]; then
+      verify_warn "当前运行目录位于 /root，下次切换到管理用户后无法直接使用 j；应先迁移到 /opt/VPS_One-Click_Scripts 并重装 shortcut。"
     fi
   fi
 }
@@ -357,6 +414,7 @@ main() {
   local failures=0
 
   verify_active_config_chain
+  verify_project_copy_layout
   verify_configured_runtime_values
 
   if is_debian12; then

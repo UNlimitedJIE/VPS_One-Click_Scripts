@@ -14,10 +14,11 @@ Usage:
   bash bootstrap.sh init [--config /path/to/conf] [--dry-run]
   bash bootstrap.sh maintain [--config /path/to/conf] [--dry-run]
   bash bootstrap.sh run <module_name> [--config /path/to/conf] [--dry-run]
+  bash bootstrap.sh sync-runtime-copy [--dry-run]
   bash bootstrap.sh step <step_no[,step_no...]> [--config /path/to/conf] [--dry-run]
   bash bootstrap.sh stepseq <target_step_no> [--config /path/to/conf] [--dry-run]
   bash bootstrap.sh preflight [--config /path/to/conf]
-  bash bootstrap.sh plan init|maintain|install-shortcut
+  bash bootstrap.sh plan init|maintain|install-shortcut|sync-runtime-copy
   bash bootstrap.sh plan run <module_name>
   bash bootstrap.sh show init|maintain [--config /path/to/conf]
   bash bootstrap.sh menu [init|maintain] [--config /path/to/conf] [--dry-run]
@@ -39,6 +40,7 @@ Examples:
   bash bootstrap.sh show init
   bash bootstrap.sh menu init
   bash bootstrap.sh install-shortcut
+  bash bootstrap.sh sync-runtime-copy
   bash bootstrap.sh plan init
   bash bootstrap.sh plan install-shortcut
   bash bootstrap.sh preflight --config config/local.conf
@@ -648,10 +650,20 @@ render_shortcut_wrapper() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-resolve_project_root() {
+preferred_runtime_root() {
+  printf '%s\n' "/opt/VPS_One-Click_Scripts"
+}
+
+project_copy_is_usable() {
+  local path="${1:-}"
+  [[ -n "${path}" && -d "${path}" && -x "${path}" && -f "${path}/bootstrap.sh" && -r "${path}/bootstrap.sh" ]]
+}
+
+list_project_roots() {
   local current_user=""
   local current_home=""
   local candidate=""
+  local -a seen_paths=()
 
   current_user="$(id -un 2>/dev/null || true)"
   current_home="${HOME:-}"
@@ -666,11 +678,26 @@ resolve_project_root() {
     "/root/VPS_One-Click_Scripts"
   do
     [[ -n "${candidate}" ]] || continue
-    if [[ -d "${candidate}" && -x "${candidate}" && -f "${candidate}/bootstrap.sh" && -r "${candidate}/bootstrap.sh" ]]; then
-      printf '%s\n' "${candidate}"
-      return 0
+    if project_copy_is_usable "${candidate}"; then
+      case " ${seen_paths[*]:-} " in
+        *" ${candidate} "*) ;;
+        *)
+          seen_paths+=("${candidate}")
+          printf '%s\n' "${candidate}"
+          ;;
+      esac
     fi
   done
+}
+
+resolve_project_root() {
+  local candidate=""
+
+  while IFS= read -r candidate; do
+    [[ -n "${candidate}" ]] || continue
+    printf '%s\n' "${candidate}"
+    return 0
+  done < <(list_project_roots)
 
   return 1
 }
@@ -681,6 +708,22 @@ if [[ -z "${PROJECT_ROOT}" ]]; then
   exit 1
 fi
 
+printf '%s\n' "[j] Runtime project root: ${PROJECT_ROOT}" >&2
+if [[ "${PROJECT_ROOT}" == "$(preferred_runtime_root)" ]]; then
+  printf '%s\n' "[j] Preferred runtime directory is active. Future git/grep/code updates should be done in ${PROJECT_ROOT}." >&2
+fi
+
+mapfile -t PROJECT_COPIES < <(list_project_roots)
+if ((${#PROJECT_COPIES[@]} > 1)); then
+  printf '%s\n' "[j] Multiple project copies detected. Active runtime copy: ${PROJECT_ROOT}" >&2
+  for candidate in "${PROJECT_COPIES[@]}"; do
+    [[ "${candidate}" == "${PROJECT_ROOT}" ]] || printf '%s\n' "[j] Other project copy: ${candidate}" >&2
+  done
+  if [[ -d "/opt/VPS_One-Click_Scripts" && -d "/root/VPS_One-Click_Scripts" ]]; then
+    printf '%s\n' "[j] Warning: update directory and runtime directory may diverge. Prefer maintaining only /opt/VPS_One-Click_Scripts." >&2
+  fi
+fi
+
 cd "${PROJECT_ROOT}"
 
 if [[ -r "${PROJECT_ROOT}/config/local.conf" ]]; then
@@ -689,6 +732,57 @@ fi
 
 exec bash "${PROJECT_ROOT}/bootstrap.sh" menu "$@"
 EOF
+}
+
+log_runtime_project_context() {
+  local runtime_root=""
+  local current_dir=""
+  local copy=""
+  local -a copies=()
+
+  runtime_root="$(discover_runtime_project_root || true)"
+  current_dir="$(pwd -P 2>/dev/null || pwd)"
+
+  log info "Current PROJECT_ROOT: ${PROJECT_ROOT}"
+  if [[ -n "${runtime_root}" ]]; then
+    log info "Preferred runtime project root: ${runtime_root}"
+  else
+    log warn "No readable runtime project root was detected in /opt, \$HOME, or /root."
+  fi
+
+  if [[ -n "${runtime_root}" && "${PROJECT_ROOT}" != "${runtime_root}" ]]; then
+    log warn "Current execution root differs from the preferred runtime root. Active runtime copy for j is ${runtime_root}."
+  fi
+
+  if [[ -n "${runtime_root}" && "${current_dir}" != "${runtime_root}" ]]; then
+    log info "Current shell directory: ${current_dir}"
+  fi
+
+  mapfile -t copies < <(list_detected_project_copies)
+  if ((${#copies[@]} > 1)); then
+    log warn "Multiple project copies detected. Active runtime copy: ${runtime_root:-${PROJECT_ROOT}}"
+    for copy in "${copies[@]}"; do
+      [[ "${copy}" == "${runtime_root:-${PROJECT_ROOT}}" ]] || log warn "Other project copy: ${copy}"
+    done
+    if selection_contains "$(shared_project_root)" "${copies[@]}" && selection_contains "/root/VPS_One-Click_Scripts" "${copies[@]}"; then
+      log warn "更新目录与运行目录可能不一致。建议只保留 /opt/VPS_One-Click_Scripts 作为长期运行和维护目录。"
+    fi
+  fi
+
+  if [[ "${runtime_root:-}" == "$(shared_project_root)" ]]; then
+    log info "Maintenance guidance: future git/grep/code edits should be done in $(shared_project_root)."
+  fi
+}
+
+log_shortcut_runtime_guidance() {
+  local runtime_root=""
+
+  runtime_root="$(discover_runtime_project_root || true)"
+  log info "Shortcut runtime priority: $(shared_project_root) > \$HOME/VPS_One-Click_Scripts > /root/VPS_One-Click_Scripts"
+  if [[ -n "${runtime_root}" ]]; then
+    log info "Current shortcut runtime root: ${runtime_root}"
+  fi
+  log info "If the system has switched to /opt runtime, future git/grep/code edits should be done in $(shared_project_root)."
 }
 
 install_shortcut() {
@@ -704,6 +798,7 @@ install_shortcut() {
   if [[ -e "${target}" ]] && cmp -s "${temp_file}" "${target}"; then
     log info "Shortcut already installed: ${target}"
     log info "Shortcut will prefer config/local.conf when present."
+    log_shortcut_runtime_guidance
     rm -f "${temp_file}"
     return 0
   fi
@@ -749,7 +844,21 @@ install_shortcut() {
 
   log info "Shortcut installed: ${target}"
   log info "Shortcut will prefer config/local.conf when present."
+  log_shortcut_runtime_guidance
   log info "You can now run: j"
+}
+
+sync_runtime_copy() {
+  local target_root=""
+  target_root="$(shared_project_root)"
+
+  if is_false "${PLAN_ONLY:-false}" && is_false "${DRY_RUN:-false}" && [[ "${EUID}" -ne 0 ]]; then
+    die "sync-runtime-copy requires root to write ${target_root}. Use: sudo bash bootstrap.sh sync-runtime-copy"
+  fi
+
+  sync_project_tree_to_runtime_root "${PROJECT_ROOT}" "${target_root}"
+  log info "Preferred runtime directory: ${target_root}"
+  log info "Future git/grep/code updates should be done in ${target_root}."
 }
 
 max_init_step_number() {
@@ -1453,6 +1562,8 @@ menu_root() {
     return 1
   fi
 
+  log_runtime_project_context
+
   while true; do
     if [[ -z "${current_phase}" ]]; then
       if ! ui_choose_phase "init"; then
@@ -1623,6 +1734,11 @@ EOF
           prepare_shortcut_context
           install_shortcut
           ;;
+        sync-runtime-copy)
+          RUN_MODE="plan-sync-runtime-copy"
+          prepare_shortcut_context
+          sync_runtime_copy
+          ;;
         run)
           [[ -n "${BOOTSTRAP_TARGET_EXTRA}" ]] || die "plan run requires a module name"
           RUN_MODE="plan-run"
@@ -1639,7 +1755,7 @@ EOF
           fi
           ;;
         *)
-          die "plan mode requires init, maintain, install-shortcut, or run <module>"
+          die "plan mode requires init, maintain, install-shortcut, sync-runtime-copy, or run <module>"
           ;;
       esac
       ;;
@@ -1682,6 +1798,11 @@ EOF
       RUN_MODE="install-shortcut"
       prepare_shortcut_context
       install_shortcut
+      ;;
+    sync-runtime-copy)
+      RUN_MODE="sync-runtime-copy"
+      prepare_shortcut_context
+      sync_runtime_copy
       ;;
     *)
       usage

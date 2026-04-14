@@ -202,8 +202,90 @@ shared_project_root() {
   printf '/opt/VPS_One-Click_Scripts\n'
 }
 
+runtime_project_candidate_paths() {
+  local current_user=""
+  local current_home=""
+
+  current_user="$(id -un 2>/dev/null || true)"
+  current_home="${HOME:-}"
+
+  if [[ -z "${current_home}" && -n "${current_user}" ]]; then
+    current_home="$(getent passwd "${current_user}" | cut -d: -f6)"
+  fi
+
+  printf '%s\n' "/opt/VPS_One-Click_Scripts"
+  if [[ -n "${current_home}" ]]; then
+    printf '%s\n' "${current_home}/VPS_One-Click_Scripts"
+  fi
+  printf '%s\n' "/root/VPS_One-Click_Scripts"
+}
+
+project_copy_is_usable() {
+  local path="${1:-}"
+  [[ -n "${path}" && -d "${path}" && -x "${path}" && -f "${path}/bootstrap.sh" && -r "${path}/bootstrap.sh" ]]
+}
+
+list_detected_project_copies() {
+  local candidate=""
+  local -a seen_paths=()
+
+  while IFS= read -r candidate; do
+    [[ -n "${candidate}" ]] || continue
+    if project_copy_is_usable "${candidate}" && ! selection_contains "${candidate}" "${seen_paths[@]}"; then
+      seen_paths+=("${candidate}")
+      printf '%s\n' "${candidate}"
+    fi
+  done < <(runtime_project_candidate_paths)
+}
+
+discover_runtime_project_root() {
+  local candidate=""
+
+  while IFS= read -r candidate; do
+    [[ -n "${candidate}" ]] || continue
+    if project_copy_is_usable "${candidate}"; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done < <(runtime_project_candidate_paths)
+
+  return 1
+}
+
 project_root_requires_shared_copy() {
   [[ "${PROJECT_ROOT}" == "/root" || "${PROJECT_ROOT}" == /root/* ]]
+}
+
+sync_project_tree_to_runtime_root() {
+  local source_root="${1:-${PROJECT_ROOT}}"
+  local target_root="${2:-$(shared_project_root)}"
+
+  [[ -n "${source_root}" ]] || die "项目源目录为空，无法同步运行副本。"
+  [[ -d "${source_root}" ]] || die "项目源目录不存在：${source_root}"
+  [[ -f "${source_root}/bootstrap.sh" ]] || die "项目源目录缺少 bootstrap.sh：${source_root}"
+  [[ -n "${target_root}" ]] || die "目标运行目录为空，无法同步运行副本。"
+
+  if is_true "${PLAN_ONLY:-false}" || is_true "${DRY_RUN:-false}"; then
+    log info "[plan] install -d -m 0755 ${target_root}"
+    if [[ "${source_root}" != "${target_root}" ]]; then
+      log info "[plan] rsync -a ${source_root}/ ${target_root}/"
+    else
+      log info "[plan] current project already equals preferred runtime root: ${target_root}"
+    fi
+    log info "[plan] chmod -R a+rX ${target_root}"
+    log info "[plan] env SHORTCUT_FORCE_OVERWRITE=true bash ${target_root}/bootstrap.sh install-shortcut"
+    return 0
+  fi
+
+  apt_install_packages rsync
+  run_cmd "Ensuring preferred runtime root ${target_root}" install -d -m 0755 "${target_root}"
+  if [[ "${source_root}" != "${target_root}" ]]; then
+    run_cmd "Syncing project from ${source_root} to preferred runtime root ${target_root}" rsync -a "${source_root}/" "${target_root}/"
+  else
+    log info "Current project already matches the preferred runtime root: ${target_root}"
+  fi
+  run_cmd "Ensuring preferred runtime root is readable for non-root admins" chmod -R a+rX "${target_root}"
+  run_cmd "Refreshing shortcut j from preferred runtime root" env SHORTCUT_FORCE_OVERWRITE=true bash "${target_root}/bootstrap.sh" install-shortcut
 }
 
 admin_ssh_dir_for_user() {

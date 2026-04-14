@@ -88,30 +88,17 @@ prepare_project_access_for_cutover() {
   local bootstrap_file=""
   local local_config_file=""
 
-  if ! project_root_requires_shared_copy; then
-    log info "Current project root is not under /root; no project migration is required before cutover."
-    return 0
-  fi
-
   sync_target="$(shared_project_root)"
   bootstrap_file="${sync_target}/bootstrap.sh"
   local_config_file="${sync_target}/config/local.conf"
 
-  log info "Current project root is under /root. Project will be synchronized to ${sync_target} before cutover."
-
-  if is_true "${PLAN_ONLY:-false}" || is_true "${DRY_RUN:-false}"; then
-    log info "[plan] install -d -m 0755 ${sync_target}"
-    log info "[plan] rsync -a ${PROJECT_ROOT}/ ${sync_target}/"
-    log info "[plan] chmod -R a+rX ${sync_target}"
-    log info "[plan] env SHORTCUT_FORCE_OVERWRITE=true bash ${sync_target}/bootstrap.sh install-shortcut"
-    return 0
+  if [[ "${PROJECT_ROOT}" == "${sync_target}" ]]; then
+    log info "Current project root already matches the preferred runtime root: ${sync_target}"
+  else
+    log info "Before cutover, project will be synchronized from ${PROJECT_ROOT} to the preferred runtime root ${sync_target}."
   fi
 
-  apt_install_packages rsync
-  run_cmd "Ensuring shared project root ${sync_target}" install -d -m 0755 "${sync_target}"
-  run_cmd "Syncing project from ${PROJECT_ROOT} to ${sync_target}" rsync -a "${PROJECT_ROOT}/" "${sync_target}/"
-  run_cmd "Ensuring synced project is readable for non-root admins" chmod -R a+rX "${sync_target}"
-  run_cmd "Refreshing shortcut j from shared project root" env SHORTCUT_FORCE_OVERWRITE=true bash "${sync_target}/bootstrap.sh" install-shortcut
+  sync_project_tree_to_runtime_root "${PROJECT_ROOT}" "${sync_target}"
 
   sudo -u "${ADMIN_USER}" test -x "${sync_target}" || die "管理用户 ${ADMIN_USER} 无法进入 ${sync_target}，不能继续关闭 root 远程登录。"
   sudo -u "${ADMIN_USER}" test -r "${bootstrap_file}" || die "管理用户 ${ADMIN_USER} 无法读取 ${bootstrap_file}，不能继续关闭 root 远程登录。"
@@ -120,8 +107,10 @@ prepare_project_access_for_cutover() {
   fi
   [[ -x /usr/local/bin/j ]] || die "Shortcut j was not refreshed successfully: /usr/local/bin/j"
 
-  log info "Shared project root is ready for admin user: ${sync_target}"
+  set_state "RUNTIME_PROJECT_ROOT" "${sync_target}"
+  log info "Preferred runtime project root is ready for admin user: ${sync_target}"
   log info "Shortcut j has been refreshed and will prefer ${sync_target} after cutover."
+  log info "After cutover, future git/grep/code edits should be done in ${sync_target}."
 }
 
 cutover_summary_body() {
