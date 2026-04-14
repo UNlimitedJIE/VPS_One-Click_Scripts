@@ -24,6 +24,7 @@ source "${SCRIPT_DIR}/../lib/common.sh"
 source "${SCRIPT_DIR}/../lib/ui.sh"
 
 _ADMIN_SUDO_PASSWORD="${_ADMIN_SUDO_PASSWORD:-}"
+_ADMIN_SUDO_MODE_SELECTED="${_ADMIN_SUDO_MODE_SELECTED:-}"
 
 ensure_groups() {
   local groups_csv="$1"
@@ -57,64 +58,83 @@ validate_admin_sudo_mode_default() {
 
 capture_admin_sudo_mode() {
   local default_mode="${ADMIN_SUDO_MODE_DEFAULT:-nopasswd}"
+  local answer=""
   local password=""
+  local password_confirm=""
 
   _ADMIN_SUDO_PASSWORD=""
+  _ADMIN_SUDO_MODE_SELECTED=""
 
   if is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
-    printf '%s\n' "${default_mode}"
+    _ADMIN_SUDO_MODE_SELECTED="${default_mode}"
+    log info "Selected sudo mode: ${_ADMIN_SUDO_MODE_SELECTED}"
     return 0
   fi
 
   if ! ui_is_interactive; then
-    if [[ "${default_mode}" == "password" ]]; then
-      die "ADMIN_SUDO_MODE_DEFAULT=password 但当前不是交互式终端，无法安全读取密码。请在交互式终端中执行，或设置 ADMIN_SUDO_MODE_DEFAULT=nopasswd。"
+    die "当前不是交互式终端，无法安全选择 sudo 模式"
+  fi
+
+  while true; do
+    if ! ui_prompt_input \
+      "sudo 模式选择" \
+      "直接回车 = 免密 sudo\n输入 p = sudo 需要密码\n这里只影响 sudo，不会启用 SSH 密码登录"; then
+      die "无法读取 sudo 模式选择，请在交互式终端中执行。"
     fi
-    printf '%s\n' "${default_mode}"
-    return 0
-  fi
 
-  if ! ui_read_secret \
-    "设置 sudo 模式" \
-    "请输入 ${ADMIN_USER} 的 sudo 密码。\n\n直接回车 = 免密 sudo\n输入非空密码 = sudo 需要该密码\n\n注意：这里设置的是本地 sudo 行为，不会自动启用 SSH 密码登录。"; then
-    die "无法安全读取 sudo 密码输入，请在交互式终端中执行。"
-  fi
+    answer="$(ui_trim_value "${UI_LAST_INPUT}")"
+    case "${answer}" in
+      "")
+        _ADMIN_SUDO_MODE_SELECTED="nopasswd"
+        log info "Selected sudo mode: ${_ADMIN_SUDO_MODE_SELECTED}"
+        return 0
+        ;;
+      p|P)
+        while true; do
+          if ! ui_read_secret "设置 sudo 密码" "请输入 ${ADMIN_USER} 的 sudo 密码："; then
+            die "无法安全读取 sudo 密码输入，请在交互式终端中执行。"
+          fi
+          password="${UI_LAST_SECRET}"
+          UI_LAST_SECRET=""
 
-  password="${UI_LAST_SECRET}"
-  UI_LAST_SECRET=""
+          if [[ -z "${password}" ]]; then
+            ui_warn_message "密码为空" "已选择 password 模式，密码不能为空，请重新输入。"
+            continue
+          fi
 
-  if [[ -z "${password}" ]]; then
-    printf '%s\n' "nopasswd"
-    return 0
-  fi
+          if ! ui_read_secret "确认 sudo 密码" "请再次输入 ${ADMIN_USER} 的 sudo 密码："; then
+            password=""
+            die "无法安全读取 sudo 密码确认输入，请在交互式终端中执行。"
+          fi
+          password_confirm="${UI_LAST_SECRET}"
+          UI_LAST_SECRET=""
 
-  _ADMIN_SUDO_PASSWORD="${password}"
-  password=""
-  printf '%s\n' "password"
+          if [[ "${password}" != "${password_confirm}" ]]; then
+            password=""
+            password_confirm=""
+            ui_warn_message "密码不一致" "两次输入的密码不一致，请重新输入。"
+            continue
+          fi
+
+          _ADMIN_SUDO_PASSWORD="${password}"
+          password=""
+          password_confirm=""
+          _ADMIN_SUDO_MODE_SELECTED="password"
+          log info "Selected sudo mode: ${_ADMIN_SUDO_MODE_SELECTED}"
+          return 0
+        done
+        ;;
+      *)
+        ui_warn_message "输入无效" "直接回车选择免密 sudo；输入 p 选择 sudo 需要密码。"
+        ;;
+    esac
+  done
 }
 
-confirm_admin_sudo_password() {
-  local password_confirm=""
-
+require_admin_sudo_password() {
   if [[ -z "${_ADMIN_SUDO_PASSWORD}" ]]; then
     die "sudo 模式为 password，但当前没有可用的本地密码输入。"
   fi
-
-  if ! ui_read_secret "确认 sudo 密码" "请再次输入 ${ADMIN_USER} 的 sudo 密码："; then
-    _ADMIN_SUDO_PASSWORD=""
-    die "无法安全读取 sudo 密码确认输入，请在交互式终端中执行。"
-  fi
-
-  password_confirm="${UI_LAST_SECRET}"
-  UI_LAST_SECRET=""
-
-  if [[ "${_ADMIN_SUDO_PASSWORD}" != "${password_confirm}" ]]; then
-    _ADMIN_SUDO_PASSWORD=""
-    password_confirm=""
-    die "两次输入的密码不一致。"
-  fi
-
-  password_confirm=""
 }
 
 apply_nopasswd_sudo() {
@@ -179,7 +199,7 @@ apply_password_sudo() {
     return 0
   fi
 
-  confirm_admin_sudo_password
+  require_admin_sudo_password
 
   printf '%s:%s\n' "${ADMIN_USER}" "${_ADMIN_SUDO_PASSWORD}" | chpasswd
   _ADMIN_SUDO_PASSWORD=""
@@ -239,7 +259,8 @@ main() {
 
   ensure_directory "${home_dir}" "0750" "${ADMIN_USER}" "${ADMIN_USER}"
 
-  sudo_mode="$(capture_admin_sudo_mode)"
+  capture_admin_sudo_mode
+  sudo_mode="${_ADMIN_SUDO_MODE_SELECTED}"
   apply_sudo_mode "${sudo_mode}"
 
   set_state "ADMIN_USER_EXISTS" "yes"

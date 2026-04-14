@@ -47,6 +47,7 @@ stage_intro_body() {
    - 创建时会询问 sudo 模式：
      直接回车 = 免密 sudo
      输入密码 = sudo 需要该密码
+   - 会先出现一个可见的 sudo 模式选择提示；若选择 password，随后才会进入隐藏密码输入
    - 这里设置的是本地 sudo 行为，不会自动启用 SSH 密码登录
 2. 配置 SSH 公钥
 3. 执行 SSH 接入准备
