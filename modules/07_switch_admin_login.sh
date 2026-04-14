@@ -29,7 +29,7 @@ confirm_cutover_execution() {
   local answer=""
 
   if is_true "${PLAN_ONLY:-false}" || is_true "${DRY_RUN:-false}"; then
-    log info "[plan] 第 7 步将要求确认后关闭 root 远程 SSH 登录。"
+    log info "[plan] 第 5 步将要求确认后关闭 root 远程 SSH 登录。"
     return 0
   fi
 

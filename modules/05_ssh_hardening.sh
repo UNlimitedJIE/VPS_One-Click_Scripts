@@ -81,7 +81,7 @@ EOF
   set_state "SSH_PORT_CHANGE_CONFIRMED" "${CONFIRM_SSH_PORT_CHANGE}"
   set_state "SSH_PASSWORD_LOGIN" "${password_auth}"
   set_state "ROOT_SSH_MODE" "${permit_root_login}"
-  log info "Root 远程 SSH 登录在本阶段仍保持可用；请先验证管理用户可登录，第 7 步才会正式关闭 root 远程登录。"
+  log info "Root 远程 SSH 登录在本阶段仍保持可用；请先验证管理用户可登录，第 5 步才会正式关闭 root 远程登录。"
 
   if [[ "${requested_port}" != "${applied_port}" ]]; then
     log warn "SSH port change is pending confirmation. Requested ${requested_port}, still applying ${applied_port}."
