@@ -10,6 +10,8 @@ source "${COMMON_DIR}/log.sh"
 source "${COMMON_DIR}/detect.sh"
 # shellcheck source=lib/validate.sh
 source "${COMMON_DIR}/validate.sh"
+# shellcheck source=lib/apt.sh
+source "${COMMON_DIR}/apt.sh"
 
 set_default_config() {
   TIMEZONE="${TIMEZONE:-UTC}"
@@ -244,34 +246,6 @@ get_state() {
   grep "^${key}=" "${STATE_FILE}" | tail -n1 | cut -d= -f2-
 }
 
-apt_update_once() {
-  if [[ "$(get_state APT_UPDATED 2>/dev/null || true)" == "true" ]]; then
-    log info "apt-get update already completed in this run."
-    return 0
-  fi
-
-  run_cmd "Refreshing apt package index" apt-get update
-  set_state "APT_UPDATED" "true"
-}
-
-apt_install_packages() {
-  local missing=()
-  local pkg=""
-  for pkg in "$@"; do
-    if ! package_installed "${pkg}"; then
-      missing+=("${pkg}")
-    fi
-  done
-
-  if ((${#missing[@]} == 0)); then
-    log info "All requested packages are already installed."
-    return 0
-  fi
-
-  apt_update_once
-  run_cmd "Installing packages: ${missing[*]}" apt-get install -y --no-install-recommends "${missing[@]}"
-}
-
 restart_service_if_exists() {
   local service_name="${1%.service}"
   service_exists "${service_name}" || {
@@ -352,6 +326,22 @@ registry_find_line() {
         print $0
         exit
       }
+    }
+  ' "$(registry_file)"
+}
+
+registry_find_line_by_phase_step() {
+  local phase="${1:-}"
+  local requested_step="${2:-}"
+
+  require_registry_file
+  awk -F '\t' -v phase="${phase}" -v step="${requested_step}" '
+    NR == 1 { next }
+    /^[[:space:]]*#/ { next }
+    NF < 9 { next }
+    $3 == phase && $1 == step {
+      print $0
+      exit
     }
   ' "$(registry_file)"
 }

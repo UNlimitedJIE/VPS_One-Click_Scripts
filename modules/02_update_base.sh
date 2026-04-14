@@ -23,8 +23,7 @@ main() {
   require_root
   require_debian12
 
-  apt_update_once
-  run_cmd "Applying conservative package upgrades" apt-get upgrade -y
+  apt_conservative_upgrade
 
   # shellcheck disable=SC2206
   local packages=( ${BASE_PACKAGES} )

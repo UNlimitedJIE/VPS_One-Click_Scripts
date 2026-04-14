@@ -14,6 +14,9 @@ Usage:
   bash bootstrap.sh init [--config /path/to/conf] [--dry-run]
   bash bootstrap.sh maintain [--config /path/to/conf] [--dry-run]
   bash bootstrap.sh run <module_name> [--config /path/to/conf] [--dry-run]
+  bash bootstrap.sh step <step_no[,step_no...]> [--config /path/to/conf] [--dry-run]
+  bash bootstrap.sh stepseq <target_step_no> [--config /path/to/conf] [--dry-run]
+  bash bootstrap.sh preflight [--config /path/to/conf]
   bash bootstrap.sh plan init|maintain
   bash bootstrap.sh plan run <module_name>
   bash bootstrap.sh show init|maintain [--config /path/to/conf]
@@ -35,6 +38,10 @@ Examples:
   bash bootstrap.sh show init
   bash bootstrap.sh menu init
   bash bootstrap.sh plan init
+  bash bootstrap.sh preflight --config config/local.conf
+  bash bootstrap.sh step 2 --config config/local.conf
+  bash bootstrap.sh step 2,3,4 --config config/local.conf
+  bash bootstrap.sh stepseq 7 --config config/local.conf
   sudo bash bootstrap.sh init
   sudo bash bootstrap.sh run 05_ssh_hardening
 EOF
@@ -400,6 +407,72 @@ build_phase_sequence_by_numeric_range() {
 build_init_sequence_to_step() {
   local target_step="$1"
   build_phase_sequence_by_numeric_range "init" "2" "${target_step}"
+}
+
+resolve_init_step_selection() {
+  local raw_selection="$1"
+  local max_step=""
+  local token=""
+  local line=""
+  local module_id=""
+  local step_no=""
+  local -a raw_tokens=()
+  local -a normalized_ids=()
+  RESOLVED_INIT_STEP_IDS=()
+
+  max_step="$(max_init_step_number)"
+  while IFS= read -r token; do
+    raw_tokens+=("${token}")
+  done < <(split_menu_input_tokens "${raw_selection}")
+  ((${#raw_tokens[@]} > 0)) || die "step mode requires at least one init step number."
+
+  for token in "${raw_tokens[@]}"; do
+    [[ "${token}" =~ ^[0-9]+$ ]] || die "Invalid init step token: ${token}. Use numbers like 2 or 2,3,4."
+    step_no=$((10#${token}))
+    if (( step_no < 1 || step_no > max_step )); then
+      die "Invalid init step number: ${step_no}. Valid init steps: 1-${max_step}."
+    fi
+
+    line="$(registry_find_line_by_phase_step "init" "${step_no}" || true)"
+    [[ -n "${line}" ]] || die "Init step ${step_no} not found in registry."
+    module_id="$(printf '%s\n' "${line}" | cut -f2)"
+    if ((${#normalized_ids[@]} == 0)) || ! selection_contains "${module_id}" "${normalized_ids[@]}"; then
+      normalized_ids+=("${module_id}")
+    fi
+  done
+
+  if ((${#normalized_ids[@]} > 0)); then
+    RESOLVED_INIT_STEP_IDS=("${normalized_ids[@]}")
+  fi
+}
+
+render_execution_list_with_scripts() {
+  local module_id=""
+  local line=""
+  local output=""
+  local step_no entry_module_id entry_phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh
+
+  for module_id in "$@"; do
+    line="$(registry_find_line "${module_id}" || true)"
+    [[ -n "${line}" ]] || continue
+    IFS=$'\t' read -r step_no entry_module_id entry_phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh <<<"${line}"
+    output+="第 ${step_no} 步: ${title_zh}"$'\n'
+    output+="脚本: ${script_path}"$'\n'
+    output+=$'\n'
+  done
+
+  printf '%s' "${output}"
+}
+
+confirm_terminal_yes() {
+  local title="$1"
+  local body="$2"
+  local answer=""
+
+  printf '\n%s\n\n%s\n' "${title}" "${body}"
+  printf '继续执行请输入 yes：'
+  read -r answer || return 1
+  [[ "${answer}" == "yes" ]]
 }
 
 build_maintain_main_sequence() {
@@ -884,6 +957,54 @@ main() {
         run_script_path "${module_path}"
       fi
       ;;
+    step)
+      [[ -n "${BOOTSTRAP_TARGET}" ]] || die "step mode requires init step number(s), for example: step 2 or step 2,3,4"
+      RUN_MODE="step"
+      prepare_context
+      resolve_init_step_selection "${BOOTSTRAP_TARGET}"
+      local selected_init_ids=()
+      if ((${#RESOLVED_INIT_STEP_IDS[@]} > 0)); then
+        selected_init_ids=("${RESOLVED_INIT_STEP_IDS[@]}")
+      fi
+      ((${#selected_init_ids[@]} > 0)) || die "No init steps selected."
+      ensure_runtime_initialized
+      run_phase_from_registry "init" "${selected_init_ids[@]}"
+      ;;
+    stepseq)
+      [[ -n "${BOOTSTRAP_TARGET}" ]] || die "stepseq mode requires a target init step number, for example: stepseq 7"
+      RUN_MODE="stepseq"
+      prepare_context
+
+      local max_step=""
+      local target_step=0
+      max_step="$(max_init_step_number)"
+      [[ "${BOOTSTRAP_TARGET}" =~ ^[0-9]+$ ]] || die "stepseq target must be a number between 2 and ${max_step}."
+      target_step=$((10#${BOOTSTRAP_TARGET}))
+      if (( target_step < 2 || target_step > max_step )); then
+        die "stepseq target must be between 2 and ${max_step}."
+      fi
+
+      local sequence_ids=()
+      local sequence_line=""
+      while IFS= read -r sequence_line; do
+        [[ -n "${sequence_line}" ]] && sequence_ids+=("${sequence_line}")
+      done < <(build_init_sequence_to_step "${target_step}")
+      ((${#sequence_ids[@]} > 0)) || die "No init steps found for range 2-${target_step}."
+
+      local preview=""
+      local confirmation_body=""
+      preview="$(render_execution_list_with_scripts "${sequence_ids[@]}")"
+      confirmation_body="$(cat <<EOF
+将从初始化第 2 步顺序执行到第 ${target_step} 步:
+
+${preview}
+EOF
+)"
+
+      confirm_terminal_yes "stepseq 确认" "${confirmation_body}" || die "stepseq aborted by user."
+      ensure_runtime_initialized
+      run_phase_from_registry "init" "${sequence_ids[@]}"
+      ;;
     plan)
       CLI_PLAN_ONLY="true"
       CLI_DRY_RUN="true"
@@ -931,6 +1052,11 @@ main() {
           die "show mode requires init or maintain"
           ;;
       esac
+      ;;
+    preflight)
+      RUN_MODE="preflight"
+      load_config
+      run_preflight_checks || exit 1
       ;;
     menu)
       RUN_MODE="menu"

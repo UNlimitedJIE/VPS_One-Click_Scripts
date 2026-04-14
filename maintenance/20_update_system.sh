@@ -22,9 +22,8 @@ main() {
   require_root
   require_debian12
 
-  apt_update_once
-  run_cmd "Upgrading installed packages" apt-get upgrade -y
-  run_cmd "Removing unused packages" apt-get autoremove -y
+  apt_conservative_upgrade
+  apt_autoremove_unused
 
   set_state "MAINT_LAST_UPDATE" "$(date -Iseconds)"
 }

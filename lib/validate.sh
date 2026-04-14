@@ -30,9 +30,91 @@ require_debian12() {
   is_debian12 || die "Target system must be Debian 12. Current: $(pretty_os_name)"
 }
 
+ssh_port_validation_error() {
+  local port="${1:-}"
+
+  if [[ ! "${port}" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "SSH_PORT must be a number."
+    return 0
+  fi
+
+  if (( port < 1 || port > 65535 )); then
+    printf '%s\n' "SSH_PORT must be between 1 and 65535."
+    return 0
+  fi
+}
+
 validate_ssh_port() {
-  [[ "${SSH_PORT}" =~ ^[0-9]+$ ]] || die "SSH_PORT must be a number."
-  (( SSH_PORT >= 1 && SSH_PORT <= 65535 )) || die "SSH_PORT must be between 1 and 65535."
+  local error_message=""
+  error_message="$(ssh_port_validation_error "${SSH_PORT}")"
+  [[ -z "${error_message}" ]] || die "${error_message}"
+}
+
+trim_surrounding_whitespace() {
+  local value="${1:-}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s\n' "${value}"
+}
+
+ssh_public_key_type_allowed() {
+  case "${1:-}" in
+    ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521|sk-ssh-ed25519@openssh.com|sk-ecdsa-sha2-nistp256@openssh.com)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+ssh_public_key_line_valid() {
+  local line="${1:-}"
+  local key_type=""
+  local key_blob=""
+  local key_comment=""
+
+  read -r key_type key_blob key_comment <<<"${line}"
+  [[ -n "${key_type}" && -n "${key_blob}" ]] || return 1
+  ssh_public_key_type_allowed "${key_type}" || return 1
+  [[ "${key_blob}" =~ ^[A-Za-z0-9+/=]+$ ]] || return 1
+
+  if command_exists ssh-keygen; then
+    local tmp_file=""
+    tmp_file="$(mktemp)"
+    printf '%s\n' "${line}" >"${tmp_file}"
+    if ssh-keygen -l -f "${tmp_file}" >/dev/null 2>&1; then
+      rm -f "${tmp_file}"
+      return 0
+    fi
+    rm -f "${tmp_file}"
+    return 1
+  fi
+
+  return 0
+}
+
+count_valid_ssh_keys_in_file() {
+  local file="$1"
+  local count=0
+  local line=""
+  local normalized_line=""
+
+  [[ -f "${file}" ]] || {
+    printf '%s\n' "0"
+    return 0
+  }
+
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    normalized_line="$(trim_surrounding_whitespace "${line}")"
+    [[ -n "${normalized_line}" ]] || continue
+    [[ "${normalized_line}" == \#* ]] && continue
+    if ssh_public_key_line_valid "${normalized_line}"; then
+      count=$((count + 1))
+    fi
+  done <"${file}"
+
+  printf '%s\n' "${count}"
 }
 
 validate_config() {
@@ -44,6 +126,12 @@ validate_config() {
 
   if [[ -n "${AUTHORIZED_KEYS_FILE}" && ! -f "${AUTHORIZED_KEYS_FILE}" ]]; then
     log warn "AUTHORIZED_KEYS_FILE does not exist yet: ${AUTHORIZED_KEYS_FILE}"
+  fi
+
+  if [[ -n "${AUTHORIZED_KEYS_FILE}" && -f "${AUTHORIZED_KEYS_FILE}" ]]; then
+    if [[ "$(count_valid_ssh_keys_in_file "${AUTHORIZED_KEYS_FILE}")" -eq 0 ]]; then
+      log warn "No valid public keys found in AUTHORIZED_KEYS_FILE: ${AUTHORIZED_KEYS_FILE}"
+    fi
   fi
 }
 
@@ -69,4 +157,125 @@ validate_sshd_config() {
     die "sshd command not found."
   fi
   sshd -t
+}
+
+preflight_print_status() {
+  local level="$1"
+  local subject="$2"
+  local message="$3"
+  printf '[%s] %s: %s\n' "${level}" "${subject}" "${message}"
+}
+
+preflight_add_issue() {
+  local issue_array_name="$1"
+  local message="$2"
+  local quoted_message=""
+  printf -v quoted_message '%q' "${message}"
+  eval "${issue_array_name}+=( ${quoted_message} )"
+}
+
+run_preflight_checks() {
+  local -a errors=()
+  local -a warnings=()
+  local current_os=""
+  local current_user=""
+  local port_error=""
+  local key_count=0
+  local pkg=""
+
+  printf 'Preflight 检查结果\n'
+  printf '配置文件: %s\n\n' "${CONFIG_FILE:-未设置}"
+
+  current_os="$(pretty_os_name 2>/dev/null || echo unknown)"
+  if is_debian12; then
+    preflight_print_status "OK" "系统" "已检测到 ${current_os}"
+  else
+    preflight_print_status "ERROR" "系统" "要求 Debian 12，当前为 ${current_os}"
+    preflight_add_issue errors "系统不是 Debian 12"
+  fi
+
+  current_user="$(id -un 2>/dev/null || echo unknown)"
+  if [[ "${EUID}" -eq 0 ]]; then
+    preflight_print_status "OK" "运行身份" "当前为 root，可直接执行正式步骤"
+  else
+    preflight_print_status "WARN" "运行身份" "当前为 ${current_user}，正式执行大多数步骤仍需 root 或 sudo"
+    preflight_add_issue warnings "当前不是 root 运行"
+  fi
+
+  if [[ -z "${ADMIN_USER}" ]]; then
+    preflight_print_status "ERROR" "ADMIN_USER" "不能为空"
+    preflight_add_issue errors "ADMIN_USER 为空"
+  elif [[ "${ADMIN_USER}" == "root" ]]; then
+    preflight_print_status "ERROR" "ADMIN_USER" "不能为 root"
+    preflight_add_issue errors "ADMIN_USER 不能为 root"
+  else
+    preflight_print_status "OK" "ADMIN_USER" "当前配置为 ${ADMIN_USER}"
+  fi
+
+  if [[ -z "${AUTHORIZED_KEYS_FILE}" ]]; then
+    preflight_print_status "ERROR" "AUTHORIZED_KEYS_FILE" "未设置"
+    preflight_add_issue errors "AUTHORIZED_KEYS_FILE 未设置"
+  elif [[ ! -f "${AUTHORIZED_KEYS_FILE}" ]]; then
+    preflight_print_status "ERROR" "AUTHORIZED_KEYS_FILE" "文件不存在: ${AUTHORIZED_KEYS_FILE}"
+    preflight_add_issue errors "AUTHORIZED_KEYS_FILE 不存在: ${AUTHORIZED_KEYS_FILE}"
+  else
+    key_count="$(count_valid_ssh_keys_in_file "${AUTHORIZED_KEYS_FILE}")"
+    if (( key_count > 0 )); then
+      preflight_print_status "OK" "AUTHORIZED_KEYS_FILE" "检测到 ${key_count} 个有效公钥: ${AUTHORIZED_KEYS_FILE}"
+    else
+      preflight_print_status "ERROR" "AUTHORIZED_KEYS_FILE" "未检测到有效公钥: ${AUTHORIZED_KEYS_FILE}"
+      preflight_add_issue errors "AUTHORIZED_KEYS_FILE 中没有有效公钥"
+    fi
+  fi
+
+  port_error="$(ssh_port_validation_error "${SSH_PORT}")"
+  if [[ -n "${port_error}" ]]; then
+    preflight_print_status "ERROR" "SSH_PORT" "${port_error}"
+    preflight_add_issue errors "SSH_PORT 非法: ${SSH_PORT}"
+  else
+    preflight_print_status "OK" "SSH_PORT" "当前配置为 ${SSH_PORT}"
+  fi
+
+  if [[ "${SSH_PORT}" != "22" ]]; then
+    if is_true "${CONFIRM_SSH_PORT_CHANGE}"; then
+      preflight_print_status "OK" "CONFIRM_SSH_PORT_CHANGE" "已确认非 22 端口切换"
+    else
+      preflight_print_status "ERROR" "CONFIRM_SSH_PORT_CHANGE" "SSH_PORT=${SSH_PORT}，但未显式确认端口切换"
+      preflight_add_issue errors "非 22 端口未设置 CONFIRM_SSH_PORT_CHANGE=true"
+    fi
+  else
+    preflight_print_status "OK" "CONFIRM_SSH_PORT_CHANGE" "SSH 端口保持 22，无需额外确认"
+  fi
+
+  for pkg in openssh-server nftables fail2ban unattended-upgrades; do
+    if package_installed "${pkg}"; then
+      preflight_print_status "OK" "软件包 ${pkg}" "已安装"
+    else
+      preflight_print_status "WARN" "软件包 ${pkg}" "未安装"
+      preflight_add_issue warnings "软件包未安装: ${pkg}"
+    fi
+  done
+
+  printf '\n汇总\n'
+  if ((${#errors[@]} > 0)); then
+    preflight_print_status "ERROR" "阻塞问题" "共 ${#errors[@]} 项"
+    local item=""
+    for item in "${errors[@]}"; do
+      printf -- '- %s\n' "${item}"
+    done
+  else
+    preflight_print_status "OK" "阻塞问题" "未发现会阻止正式执行的高风险项"
+  fi
+
+  if ((${#warnings[@]} > 0)); then
+    preflight_print_status "WARN" "提示项" "共 ${#warnings[@]} 项"
+    local item=""
+    for item in "${warnings[@]}"; do
+      printf -- '- %s\n' "${item}"
+    done
+  else
+    preflight_print_status "OK" "提示项" "无额外提示"
+  fi
+
+  ((${#errors[@]} == 0))
 }

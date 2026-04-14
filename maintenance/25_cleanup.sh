@@ -22,7 +22,7 @@ main() {
   require_root
   require_debian12
 
-  run_cmd "Removing unused packages" apt-get autoremove -y
+  apt_autoremove_unused
 
   if is_true "${CLEANUP_APT_CACHE}"; then
     run_cmd "Cleaning apt cache" apt-get clean
