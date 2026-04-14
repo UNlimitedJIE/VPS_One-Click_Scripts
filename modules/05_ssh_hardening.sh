@@ -30,6 +30,8 @@ main() {
   local password_auth="yes"
   local kbd_auth="yes"
   local safe_gate_passed="no"
+  local runtime_port=""
+  local target_port_listening="no"
 
   if [[ -n "${ADMIN_USER}" ]] && id -u "${ADMIN_USER}" >/dev/null 2>&1 && admin_authorized_keys_ready_for_user "${ADMIN_USER}"; then
     safe_gate_passed="yes"
@@ -83,14 +85,30 @@ EOF
   local ssh_service
   ssh_service="$(ssh_service_name)"
   reload_service_if_exists "${ssh_service}"
+  runtime_port="$(current_ssh_port)"
+  if ssh_port_is_listening_locally "${applied_port}"; then
+    target_port_listening="yes"
+  fi
 
   set_state "SSH_PORT_REQUESTED" "${requested_port}"
   set_state "SSH_PORT_EFFECTIVE" "${applied_port}"
+  set_state "SSH_PORT_RUNTIME_EFFECTIVE" "${runtime_port}"
+  set_state "SSH_TARGET_PORT_LISTENING" "${target_port_listening}"
   set_state "SSH_PORT_CHANGE_CONFIRMED" "${CONFIRM_SSH_PORT_CHANGE}"
   set_state "SSH_PASSWORD_LOGIN" "${password_auth}"
   set_state "ROOT_SSH_MODE" "${permit_root_login}"
   log info "SSH_SAFE_GATE_PASSED=${safe_gate_passed}"
+  log info "Current effective SSH port: ${applied_port}"
+  log info "Current sshd runtime port: ${runtime_port}"
   log info "Root 远程 SSH 登录在本阶段仍保持可用；请先验证管理用户可登录，第 5 步才会正式关闭 root 远程登录。"
+
+  if [[ "${runtime_port}" != "${applied_port}" ]]; then
+    log warn "Configured effective SSH port is ${applied_port}, but sshd -T currently reports ${runtime_port}."
+  fi
+
+  if [[ "${target_port_listening}" != "yes" ]]; then
+    log warn "Local listening check did not detect SSH on port ${applied_port}. Verify sshd state before closing any existing session."
+  fi
 
   if [[ "${requested_port}" != "${applied_port}" ]]; then
     log warn "SSH port change is pending confirmation. Requested ${requested_port}, still applying ${applied_port}."

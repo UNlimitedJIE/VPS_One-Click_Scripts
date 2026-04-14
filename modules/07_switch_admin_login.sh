@@ -60,6 +60,7 @@ ensure_cutover_prerequisites() {
   local auth_file=""
   local auth_key_count="0"
   local safe_gate_state=""
+  local runtime_port=""
 
   [[ -n "${ADMIN_USER:-}" ]] || die "管理用户名未设置，无法关闭 root 远程登录。"
   id -u "${ADMIN_USER}" >/dev/null 2>&1 || die "管理用户不存在：${ADMIN_USER}"
@@ -75,6 +76,11 @@ ensure_cutover_prerequisites() {
 
   effective_port="$(effective_ssh_port_for_changes)"
   [[ "${effective_port}" =~ ^[0-9]+$ ]] || die "当前 SSH 端口无法识别，不能继续关闭 root 远程登录。"
+  runtime_port="$(current_ssh_port)"
+  [[ "${runtime_port}" =~ ^[0-9]+$ ]] || die "当前 sshd 运行端口无法识别，不能继续关闭 root 远程登录。"
+  [[ "${runtime_port}" == "${effective_port}" ]] || die "当前目标 SSH 端口是 ${effective_port}，但 sshd -T 报告的运行端口是 ${runtime_port}。请先修复 SSH 配置并重新验证。"
+  ssh_port_is_listening_locally "${effective_port}" || die "当前目标 SSH 端口 ${effective_port} 未检测到本机监听，不能继续关闭 root 远程登录。"
+  log info "Next connection should use SSH port: ${effective_port}"
 }
 
 prepare_project_access_for_cutover() {
@@ -167,6 +173,7 @@ EOF
 
   ssh_service="$(ssh_service_name)"
   reload_service_if_exists "${ssh_service}"
+  ssh_port_is_listening_locally "$(effective_ssh_port_for_changes)" || die "关闭 root 远程登录后，未检测到目标 SSH 端口在本机监听。请检查 sshd 状态。"
 
   set_state "ROOT_SSH_MODE" "no"
   set_state "ADMIN_LOGIN_CUTOVER" "yes"

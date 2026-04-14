@@ -189,6 +189,15 @@ bootstrap_authorized_keys_fallback_path() {
   printf '/root/bootstrap_authorized_keys\n'
 }
 
+preferred_authorized_keys_source_path() {
+  printf '/opt/vps-bootstrap/bootstrap_authorized_keys\n'
+}
+
+authorized_keys_source_is_root_only_path() {
+  local file="${1:-${AUTHORIZED_KEYS_FILE:-}}"
+  [[ -n "${file}" && ( "${file}" == "/root" || "${file}" == /root/* ) ]]
+}
+
 shared_project_root() {
   printf '/opt/VPS_One-Click_Scripts\n'
 }
@@ -234,6 +243,12 @@ admin_authorized_keys_ready_for_user() {
   [[ -n "${user}" ]] || return 1
   id -u "${user}" >/dev/null 2>&1 || return 1
   [[ "$(admin_authorized_keys_count_for_user "${user}")" -gt 0 ]]
+}
+
+ssh_port_is_listening_locally() {
+  local port="${1:-}"
+  [[ -n "${port}" ]] || return 1
+  listening_tcp_ports | grep -Fxq "${port}"
 }
 
 set_runtime_admin_user() {

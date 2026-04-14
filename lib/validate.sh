@@ -166,13 +166,27 @@ validate_config() {
   validate_ssh_port
 
   local admin_user_error=""
+  local target_keys_ready="no"
   if [[ -n "${ADMIN_USER}" ]]; then
     admin_user_error="$(admin_user_validation_error "${ADMIN_USER}")"
     [[ -z "${admin_user_error}" ]] || die "${admin_user_error}"
+    if admin_authorized_keys_ready_for_user "${ADMIN_USER}"; then
+      target_keys_ready="yes"
+    fi
   fi
 
   if [[ -n "${AUTHORIZED_KEYS_FILE}" && ! -f "${AUTHORIZED_KEYS_FILE}" ]]; then
-    log warn "AUTHORIZED_KEYS_FILE does not exist yet: ${AUTHORIZED_KEYS_FILE}"
+    if authorized_keys_source_is_root_only_path "${AUTHORIZED_KEYS_FILE}" && [[ "${EUID}" -ne 0 ]]; then
+      if [[ "${target_keys_ready}" == "yes" ]]; then
+        log info "AUTHORIZED_KEYS_FILE 当前指向 /root 下路径，非 root 用户不可访问；若目标账户 authorized_keys 已安装，可忽略此提示。"
+      else
+        log warn "AUTHORIZED_KEYS_FILE 当前指向 /root 下路径，非 root 用户不可访问；若尚未安装到目标账户，建议改用可读路径，例如 $(preferred_authorized_keys_source_path)。"
+      fi
+    elif [[ "${target_keys_ready}" == "yes" ]]; then
+      log info "AUTHORIZED_KEYS_FILE 源文件当前不可访问或不存在，但目标账户 authorized_keys 已安装完成。"
+    else
+      log warn "AUTHORIZED_KEYS_FILE does not exist yet: ${AUTHORIZED_KEYS_FILE}"
+    fi
   fi
 
   if [[ -n "${AUTHORIZED_KEYS_FILE}" && -f "${AUTHORIZED_KEYS_FILE}" ]]; then
@@ -228,6 +242,7 @@ run_preflight_checks() {
   local current_user=""
   local port_error=""
   local key_count=0
+  local target_keys_ready="no"
   local pkg=""
 
   printf 'Preflight 检查结果\n'
@@ -260,19 +275,38 @@ run_preflight_checks() {
       preflight_add_issue errors "${admin_user_error}"
     else
       preflight_print_status "OK" "ADMIN_USER" "当前配置为 ${ADMIN_USER}"
+      if admin_authorized_keys_ready_for_user "${ADMIN_USER}"; then
+        target_keys_ready="yes"
+      fi
     fi
   fi
 
   if [[ -z "${AUTHORIZED_KEYS_FILE}" ]]; then
-    preflight_print_status "ERROR" "AUTHORIZED_KEYS_FILE" "未设置"
-    preflight_add_issue errors "AUTHORIZED_KEYS_FILE 未设置"
+    if [[ "${target_keys_ready}" == "yes" ]]; then
+      preflight_print_status "WARN" "AUTHORIZED_KEYS_FILE" "未设置；但目标账户 authorized_keys 已安装完成，后续 SSH 收紧不受此项阻塞"
+      preflight_add_issue warnings "AUTHORIZED_KEYS_FILE 未设置；当前仅缺少后续重新导入公钥的源文件"
+    else
+      preflight_print_status "ERROR" "AUTHORIZED_KEYS_FILE" "未设置"
+      preflight_add_issue errors "AUTHORIZED_KEYS_FILE 未设置"
+    fi
   elif [[ ! -f "${AUTHORIZED_KEYS_FILE}" ]]; then
-    preflight_print_status "ERROR" "AUTHORIZED_KEYS_FILE" "文件不存在: ${AUTHORIZED_KEYS_FILE}"
-    preflight_add_issue errors "AUTHORIZED_KEYS_FILE 不存在: ${AUTHORIZED_KEYS_FILE}"
+    if authorized_keys_source_is_root_only_path "${AUTHORIZED_KEYS_FILE}" && [[ "${EUID}" -ne 0 ]] && [[ "${target_keys_ready}" == "yes" ]]; then
+      preflight_print_status "WARN" "AUTHORIZED_KEYS_FILE" "当前指向 /root 下路径，非 root 用户不可访问；但目标账户 authorized_keys 已安装，可忽略此提示"
+      preflight_add_issue warnings "AUTHORIZED_KEYS_FILE 当前位于 /root 下；如需后续维护，建议迁移到 $(preferred_authorized_keys_source_path)"
+    elif [[ "${target_keys_ready}" == "yes" ]]; then
+      preflight_print_status "WARN" "AUTHORIZED_KEYS_FILE" "源文件当前不可访问或不存在；但目标账户 authorized_keys 已安装完成"
+      preflight_add_issue warnings "AUTHORIZED_KEYS_FILE 当前不可访问；如需后续维护，建议迁移到可读路径"
+    else
+      preflight_print_status "ERROR" "AUTHORIZED_KEYS_FILE" "文件不存在: ${AUTHORIZED_KEYS_FILE}"
+      preflight_add_issue errors "AUTHORIZED_KEYS_FILE 不存在: ${AUTHORIZED_KEYS_FILE}"
+    fi
   else
     key_count="$(count_valid_ssh_keys_in_file "${AUTHORIZED_KEYS_FILE}")"
     if (( key_count > 0 )); then
       preflight_print_status "OK" "AUTHORIZED_KEYS_FILE" "检测到 ${key_count} 个有效公钥: ${AUTHORIZED_KEYS_FILE}"
+    elif [[ "${target_keys_ready}" == "yes" ]]; then
+      preflight_print_status "WARN" "AUTHORIZED_KEYS_FILE" "源文件中未检测到有效公钥；但目标账户 authorized_keys 已安装完成"
+      preflight_add_issue warnings "AUTHORIZED_KEYS_FILE 中没有有效公钥；当前不会阻塞后续 SSH 收紧"
     else
       preflight_print_status "ERROR" "AUTHORIZED_KEYS_FILE" "未检测到有效公钥: ${AUTHORIZED_KEYS_FILE}"
       preflight_add_issue errors "AUTHORIZED_KEYS_FILE 中没有有效公钥"

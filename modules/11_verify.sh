@@ -71,6 +71,12 @@ verify_active_config_chain() {
 }
 
 verify_configured_runtime_values() {
+  local target_keys_ready="no"
+
+  if [[ -n "${ADMIN_USER:-}" ]] && admin_authorized_keys_ready_for_user "${ADMIN_USER}"; then
+    target_keys_ready="yes"
+  fi
+
   if [[ -n "${ADMIN_USER:-}" ]]; then
     verify_ok "Configured ADMIN_USER=${ADMIN_USER}"
   else
@@ -80,6 +86,13 @@ verify_configured_runtime_values() {
   if [[ -n "${AUTHORIZED_KEYS_FILE:-}" ]]; then
     if [[ -f "${AUTHORIZED_KEYS_FILE}" ]]; then
       verify_ok "Configured AUTHORIZED_KEYS_FILE=${AUTHORIZED_KEYS_FILE}"
+    elif [[ "${target_keys_ready}" == "yes" ]]; then
+      if authorized_keys_source_is_root_only_path "${AUTHORIZED_KEYS_FILE}"; then
+        log info "[INFO] AUTHORIZED_KEYS_FILE 当前指向 /root 下路径；若目标账户 authorized_keys 已安装，可忽略此提示。"
+        log info "[INFO] Suggestion: future source path can be moved to $(preferred_authorized_keys_source_path)."
+      else
+        log info "[INFO] AUTHORIZED_KEYS_FILE 源文件当前不可访问或不存在，但目标账户 authorized_keys 已安装完成。"
+      fi
     else
       verify_warn "Configured AUTHORIZED_KEYS_FILE does not exist: ${AUTHORIZED_KEYS_FILE}"
     fi
@@ -105,7 +118,7 @@ verify_admin_can_read_project_bootstrap() {
     verify_warn "Admin user cannot read project bootstrap.sh: ${PROJECT_ROOT}/bootstrap.sh"
     if project_root_requires_shared_copy; then
       verify_warn "当前项目位于 /root，下次切换到管理用户后无法直接使用 j；应先迁移到 /opt/VPS_One-Click_Scripts 并重装 shortcut。"
-    }
+    fi
   fi
 }
 
@@ -191,6 +204,8 @@ verify_sshd_effective_settings() {
   local password_auth=""
   local pubkey_auth=""
   local permit_root_login=""
+  local port=""
+  local runtime_port=""
 
   if ! command_exists sshd; then
     verify_fail "sshd command not found"
@@ -205,6 +220,8 @@ verify_sshd_effective_settings() {
   password_auth="$(sshd_effective_value "passwordauthentication" "${sshd_output}")"
   pubkey_auth="$(sshd_effective_value "pubkeyauthentication" "${sshd_output}")"
   permit_root_login="$(sshd_effective_value "permitrootlogin" "${sshd_output}")"
+  port="$(sshd_effective_value "port" "${sshd_output}")"
+  runtime_port="$(current_ssh_port)"
 
   if [[ -n "${password_auth}" ]]; then
     if [[ "${password_auth}" == "no" ]]; then
@@ -232,6 +249,22 @@ verify_sshd_effective_settings() {
     fi
   else
     verify_fail "Unable to read permitrootlogin from sshd -T"
+  fi
+
+  if [[ -n "${port}" ]]; then
+    verify_ok "sshd -T port=${port}"
+    log info "[INFO] Current effective SSH port: ${port}"
+    if ssh_port_is_listening_locally "${port}"; then
+      verify_ok "Local listening check passed for SSH port ${port}"
+    else
+      verify_fail "Local listening check failed for SSH port ${port}"
+    fi
+  else
+    verify_fail "Unable to read port from sshd -T"
+  fi
+
+  if [[ -n "${runtime_port}" && -n "${port}" && "${runtime_port}" != "${port}" ]]; then
+    verify_warn "current_ssh_port reports ${runtime_port}, while sshd -T reports ${port}"
   fi
 
   log info "[INFO] sshd -T only verifies effective local SSH settings; external SSH connectivity still needs a separate manual login test."

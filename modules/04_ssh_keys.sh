@@ -105,23 +105,28 @@ main() {
   ssh_dir="${home_dir}/.ssh"
   auth_file="${ssh_dir}/authorized_keys"
 
+  log info "Authorized keys target file: ${auth_file}"
+
   source_file="$(resolve_authorized_keys_source || true)"
   if [[ -z "${source_file}" ]]; then
     if [[ "$(count_valid_ssh_keys_in_file "${auth_file}")" -gt 0 ]]; then
       key_count="$(count_valid_ssh_keys_in_file "${auth_file}")"
       set_state "AUTHORIZED_KEYS_PRESENT" "yes"
       set_state "AUTHORIZED_KEYS_COUNT" "${key_count}"
-      log warn "No configured authorized_keys source was resolved, but target authorized_keys already exists for ${ADMIN_USER}."
+      log info "No authorized_keys source file is currently available, but target authorized_keys already exists for ${ADMIN_USER}."
       log info "Valid authorized_keys count for ${ADMIN_USER}: ${key_count}"
       return 0
     fi
 
     log warn "AUTHORIZED_KEYS_FILE is empty and no valid fallback source is available. Skip automatic key installation."
     log warn "Manual action: upload a public key file or create /root/bootstrap_authorized_keys, then rerun 04_ssh_keys before tightening SSH."
+    log info "Suggestion: for future non-root maintenance, move the source file to $(preferred_authorized_keys_source_path) and update AUTHORIZED_KEYS_FILE."
     set_state "AUTHORIZED_KEYS_PRESENT" "no"
     set_state "AUTHORIZED_KEYS_COUNT" "0"
     return 0
   fi
+
+  log info "Authorized keys source file: ${source_file}"
 
   ensure_directory "${ssh_dir}" "0700" "${ADMIN_USER}" "${ADMIN_USER}"
   tmp_file="$(mktemp)"
