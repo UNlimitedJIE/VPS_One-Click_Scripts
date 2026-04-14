@@ -8,8 +8,6 @@ source "${SCRIPT_DIR}/lib/common.sh"
 # shellcheck source=lib/ui.sh
 source "${SCRIPT_DIR}/lib/ui.sh"
 
-MENU_NAV_ACTION=""
-
 usage() {
   cat <<'EOF'
 Usage:
@@ -19,10 +17,11 @@ Usage:
   bash bootstrap.sh step <step_no[,step_no...]> [--config /path/to/conf] [--dry-run]
   bash bootstrap.sh stepseq <target_step_no> [--config /path/to/conf] [--dry-run]
   bash bootstrap.sh preflight [--config /path/to/conf]
-  bash bootstrap.sh plan init|maintain
+  bash bootstrap.sh plan init|maintain|install-shortcut
   bash bootstrap.sh plan run <module_name>
   bash bootstrap.sh show init|maintain [--config /path/to/conf]
   bash bootstrap.sh menu [init|maintain] [--config /path/to/conf] [--dry-run]
+  bash bootstrap.sh install-shortcut [--dry-run]
 
 Menu shortcuts:
   Root menu: 0 = 退出程序
@@ -39,7 +38,9 @@ Menu purpose:
 Examples:
   bash bootstrap.sh show init
   bash bootstrap.sh menu init
+  bash bootstrap.sh install-shortcut
   bash bootstrap.sh plan init
+  bash bootstrap.sh plan install-shortcut
   bash bootstrap.sh preflight --config config/local.conf
   bash bootstrap.sh step 2 --config config/local.conf
   bash bootstrap.sh step 2,3,4 --config config/local.conf
@@ -94,6 +95,12 @@ prepare_context() {
   RUN_MODE="${RUN_MODE:-bootstrap}"
   load_config
   validate_config
+}
+
+prepare_shortcut_context() {
+  export CLI_CONFIG_FILE CLI_PLAN_ONLY CLI_DRY_RUN
+  RUN_MODE="${RUN_MODE:-bootstrap}"
+  load_config
 }
 
 ensure_runtime_initialized() {
@@ -387,6 +394,190 @@ render_execution_summary() {
   done
 
   printf '%s' "${output}"
+}
+
+menu_action_summary() {
+  local phase="$1"
+  shift || true
+  local -a selected=("$@")
+  local count="${#selected[@]}"
+
+  if (( count == 0 )); then
+    printf '%s\n' "$(phase_label_zh "${phase}")"
+    return 0
+  fi
+
+  local first_line=""
+  first_line="$(registry_find_line "${selected[0]}" || true)"
+  [[ -n "${first_line}" ]] || {
+    printf '%s\n' "$(phase_label_zh "${phase}")"
+    return 0
+  }
+
+  local step_no module_id entry_phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh
+  IFS=$'\t' read -r step_no module_id entry_phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh <<<"${first_line}"
+
+  if (( count == 1 )); then
+    case "${phase}" in
+      init)
+        printf '第 %s 步 %s\n' "${step_no}" "${title_zh}"
+        ;;
+      maintain)
+        printf '%s %s\n' "${step_no}" "${title_zh}"
+        ;;
+      cautious)
+        printf '%s %s\n' "${step_no}" "${title_zh}"
+        ;;
+      *)
+        printf '%s\n' "${title_zh}"
+        ;;
+    esac
+    return 0
+  fi
+
+  local numbers=""
+  local selected_id="" selected_line="" selected_step=""
+  for selected_id in "${selected[@]}"; do
+    selected_line="$(registry_find_line "${selected_id}" || true)"
+    [[ -n "${selected_line}" ]] || continue
+    selected_step="$(printf '%s\n' "${selected_line}" | cut -f1)"
+    [[ -n "${selected_step}" ]] || continue
+    if [[ -n "${numbers}" ]]; then
+      numbers+=","
+    fi
+    numbers+="${selected_step}"
+  done
+
+  case "${phase}" in
+    init)
+      printf '初始化 %s 项（%s）\n' "${count}" "${numbers}"
+      ;;
+    maintain)
+      printf '长期维护 %s 项（%s）\n' "${count}" "${numbers}"
+      ;;
+    cautious)
+      printf '谨慎操作 %s 项（%s）\n' "${count}" "${numbers}"
+      ;;
+    *)
+      printf '%s %s 项\n' "$(phase_label_zh "${phase}")" "${count}"
+      ;;
+  esac
+}
+
+menu_show_action_result() {
+  local result="$1"
+  local summary="$2"
+  local body=""
+
+  case "${result}" in
+    success)
+      body="已完成：${summary}"
+      ;;
+    *)
+      body=$'执行未完成：'"${summary}"$'\n请查看上方输出或日志，然后返回菜单继续操作。'
+      ;;
+  esac
+
+  ui_print_raw $'\n'"${body}"$'\n'
+  ui_wait_for_enter "按回车返回菜单：" || true
+}
+
+menu_execute_with_feedback() {
+  local summary="$1"
+  shift || true
+  local status=0
+
+  ensure_runtime_initialized
+
+  set +e
+  (
+    set -e
+    "$@"
+  )
+  status=$?
+  set -e
+
+  if (( status == 0 )); then
+    menu_show_action_result "success" "${summary}"
+    return 0
+  fi
+
+  menu_show_action_result "incomplete" "${summary}"
+  return 1
+}
+
+shortcut_target_path() {
+  printf '/usr/local/bin/j\n'
+}
+
+render_shortcut_wrapper() {
+  cat <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_ROOT="${PROJECT_ROOT}"
+cd "\${PROJECT_ROOT}"
+exec bash "${PROJECT_ROOT}/bootstrap.sh" menu "\$@"
+EOF
+}
+
+install_shortcut() {
+  local target=""
+  local temp_file=""
+  local wrapper_content=""
+
+  target="$(shortcut_target_path)"
+  temp_file="$(mktemp)"
+  wrapper_content="$(render_shortcut_wrapper)"
+  printf '%s\n' "${wrapper_content}" >"${temp_file}"
+
+  if [[ -e "${target}" ]] && cmp -s "${temp_file}" "${target}"; then
+    log info "Shortcut already installed: ${target}"
+    rm -f "${temp_file}"
+    return 0
+  fi
+
+  if is_true "${PLAN_ONLY:-false}" || is_true "${DRY_RUN:-false}"; then
+    if [[ -e "${target}" ]]; then
+      log info "[plan] shortcut target exists and would require overwrite confirmation: ${target}"
+    else
+      log info "[plan] shortcut would be installed: ${target}"
+    fi
+    printf '\n将写入 %s:\n\n%s\n' "${target}" "${wrapper_content}"
+    rm -f "${temp_file}"
+    return 0
+  fi
+
+  if [[ ! -e "${target}" && "${EUID}" -ne 0 ]]; then
+    rm -f "${temp_file}"
+    die "install-shortcut requires root to write ${target}. Use: sudo bash bootstrap.sh install-shortcut"
+  fi
+
+  if [[ -e "${target}" ]]; then
+    if [[ "${EUID}" -ne 0 ]]; then
+      rm -f "${temp_file}"
+      die "install-shortcut requires root to overwrite ${target}. Use: sudo bash bootstrap.sh install-shortcut"
+    fi
+
+    log warn "Shortcut already exists: ${target}"
+    if ! ui_require_interactive; then
+      rm -f "${temp_file}"
+      die "${target} already exists. Rerun in an interactive terminal to confirm overwrite, or remove it manually."
+    fi
+
+    if ! ui_confirm_text "覆盖 j 命令" "${target} 已存在。\n\n输入 yes 覆盖；输入其他内容跳过安装。"; then
+      log info "Skipped installing shortcut: ${target}"
+      rm -f "${temp_file}"
+      return 0
+    fi
+  fi
+
+  install -d -m 0755 "$(dirname "${target}")"
+  install -m 0755 "${temp_file}" "${target}"
+  rm -f "${temp_file}"
+
+  log info "Shortcut installed: ${target}"
+  log info "You can now run: j"
 }
 
 max_init_step_number() {
@@ -712,7 +903,6 @@ menu_init_phase() {
   while true; do
     local raw_input=""
     if ! prompt_init_execution_input; then
-      MENU_NAV_ACTION="back"
       return 0
     fi
     raw_input="$(ui_trim_value "${UI_LAST_INPUT}")"
@@ -723,18 +913,17 @@ menu_init_phase() {
     fi
 
     if [[ "${raw_input}" == "0" ]]; then
-      MENU_NAV_ACTION="back"
       return 0
     fi
 
     if [[ "${raw_input}" == "99" ]]; then
       local sequence_ids=()
+      local sequence_summary=""
       mapfile -t sequence_ids < <(prompt_init_sequence_selection || true)
       ((${#sequence_ids[@]} > 0)) || continue
-      ensure_runtime_initialized
-      run_phase_from_registry "init" "${sequence_ids[@]}"
-      MENU_NAV_ACTION="done"
-      return 0
+      sequence_summary="$(menu_action_summary "init" "${sequence_ids[@]}")"
+      menu_execute_with_feedback "${sequence_summary}" run_phase_from_registry "init" "${sequence_ids[@]}" || true
+      continue
     fi
 
     local raw_tokens=()
@@ -763,16 +952,15 @@ menu_init_phase() {
     fi
 
     local normalized_selection=()
+    local selection_summary=""
     mapfile -t normalized_selection < <(normalize_selection_list_safe "init" "${raw_tokens[@]}" || true)
     ((${#normalized_selection[@]} > 0)) || {
       ui_warn_message "输入无效" "存在无法识别的编号，请按菜单显示的编号输入。"
       continue
     }
 
-    ensure_runtime_initialized
-    run_phase_from_registry "init" "${normalized_selection[@]}"
-    MENU_NAV_ACTION="done"
-    return 0
+    selection_summary="$(menu_action_summary "init" "${normalized_selection[@]}")"
+    menu_execute_with_feedback "${selection_summary}" run_phase_from_registry "init" "${normalized_selection[@]}" || true
   done
 }
 
@@ -780,7 +968,6 @@ menu_cautious_phase() {
   while true; do
     local raw_input=""
     if ! prompt_cautious_execution_input; then
-      MENU_NAV_ACTION="back"
       return 0
     fi
     raw_input="$(ui_trim_value "${UI_LAST_INPUT}")"
@@ -791,7 +978,6 @@ menu_cautious_phase() {
     fi
 
     if [[ "${raw_input}" == "0" ]]; then
-      MENU_NAV_ACTION="back"
       return 0
     fi
 
@@ -816,16 +1002,15 @@ menu_cautious_phase() {
     fi
 
     local normalized_selection=()
+    local selection_summary=""
     mapfile -t normalized_selection < <(normalize_cautious_selection_safe "${raw_tokens[@]}" || true)
     ((${#normalized_selection[@]} > 0)) || {
       ui_warn_message "输入无效" "存在无法识别的谨慎操作编号，请按菜单显示的编号输入。"
       continue
     }
 
-    ensure_runtime_initialized
-    run_cautious_modules "${normalized_selection[@]}" || continue
-    MENU_NAV_ACTION="done"
-    return 0
+    selection_summary="$(menu_action_summary "cautious" "${normalized_selection[@]}")"
+    menu_execute_with_feedback "${selection_summary}" run_cautious_modules "${normalized_selection[@]}" || true
   done
 }
 
@@ -833,7 +1018,6 @@ menu_maintain_phase() {
   while true; do
     local raw_input=""
     if ! prompt_maintain_execution_input; then
-      MENU_NAV_ACTION="back"
       return 0
     fi
     raw_input="$(ui_trim_value "${UI_LAST_INPUT}")"
@@ -845,26 +1029,21 @@ menu_maintain_phase() {
 
     case "${raw_input}" in
       0)
-        MENU_NAV_ACTION="back"
         return 0
         ;;
       9)
         local sequence_ids=()
+        local sequence_summary=""
         mapfile -t sequence_ids < <(build_maintain_main_sequence)
         ((${#sequence_ids[@]} > 0)) || die "No maintain modules found for steps 1 to 8."
         confirm_maintain_sequence "${sequence_ids[@]}" || continue
-        ensure_runtime_initialized
-        run_phase_from_registry "maintain" "${sequence_ids[@]}"
-        MENU_NAV_ACTION="done"
-        return 0
+        sequence_summary="$(menu_action_summary "maintain" "${sequence_ids[@]}")"
+        menu_execute_with_feedback "${sequence_summary}" run_phase_from_registry "maintain" "${sequence_ids[@]}" || true
+        continue
         ;;
       10)
         menu_cautious_phase
-        if [[ "${MENU_NAV_ACTION:-}" == "back" ]]; then
-          continue
-        fi
-        MENU_NAV_ACTION="done"
-        return 0
+        continue
         ;;
     esac
 
@@ -894,16 +1073,15 @@ menu_maintain_phase() {
     fi
 
     local normalized_selection=()
+    local selection_summary=""
     mapfile -t normalized_selection < <(normalize_selection_list_safe "maintain" "${raw_tokens[@]}" || true)
     ((${#normalized_selection[@]} > 0)) || {
       ui_warn_message "输入无效" "存在无法识别的编号，请按菜单显示的编号输入。"
       continue
     }
 
-    ensure_runtime_initialized
-    run_phase_from_registry "maintain" "${normalized_selection[@]}"
-    MENU_NAV_ACTION="done"
-    return 0
+    selection_summary="$(menu_action_summary "maintain" "${normalized_selection[@]}")"
+    menu_execute_with_feedback "${selection_summary}" run_phase_from_registry "maintain" "${normalized_selection[@]}" || true
   done
 }
 
@@ -945,14 +1123,10 @@ menu_root() {
         return 0
         ;;
       init|maintain)
-        MENU_NAV_ACTION=""
         menu_phase "${current_phase}"
-        if [[ "${MENU_NAV_ACTION:-}" == "back" ]]; then
-          current_phase=""
-          initial_phase=""
-          continue
-        fi
-        return 0
+        current_phase=""
+        initial_phase=""
+        continue
         ;;
       *)
         die "Unsupported menu phase: ${current_phase}"
@@ -1056,6 +1230,11 @@ EOF
           ensure_runtime_initialized
           run_phase_from_registry "maintain"
           ;;
+        install-shortcut)
+          RUN_MODE="plan-install-shortcut"
+          prepare_shortcut_context
+          install_shortcut
+          ;;
         run)
           [[ -n "${BOOTSTRAP_TARGET_EXTRA}" ]] || die "plan run requires a module name"
           RUN_MODE="plan-run"
@@ -1072,7 +1251,7 @@ EOF
           fi
           ;;
         *)
-          die "plan mode requires init, maintain, or run <module>"
+          die "plan mode requires init, maintain, install-shortcut, or run <module>"
           ;;
       esac
       ;;
@@ -1107,6 +1286,11 @@ EOF
           die "menu mode requires init, maintain, or no phase"
           ;;
       esac
+      ;;
+    install-shortcut)
+      RUN_MODE="install-shortcut"
+      prepare_shortcut_context
+      install_shortcut
       ;;
     *)
       usage

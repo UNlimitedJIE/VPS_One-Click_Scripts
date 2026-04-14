@@ -179,6 +179,16 @@ ui_prompt_input() {
   return 0
 }
 
+ui_wait_for_enter() {
+  local prompt="${1:-按回车返回菜单：}"
+
+  ui_require_interactive || return 1
+
+  ui_print_raw "${prompt}"
+  ui_read_line || return 1
+  return 0
+}
+
 ui_choose_phase() {
   local default_phase="${1:-init}"
   UI_LAST_INPUT=""
