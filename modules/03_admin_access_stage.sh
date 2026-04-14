@@ -44,6 +44,20 @@ stage_config_source_label() {
   printf '%s\n' "${ACTIVE_CONFIG_CHAIN:-${CONFIG_FILE:-<未设置>}}"
 }
 
+stage_persistent_local_config_path() {
+  printf '%s/config/local.conf\n' "$(shared_project_root)"
+}
+
+persist_stage_admin_user_selection() {
+  local username="$1"
+  local target_file=""
+
+  target_file="$(stage_persistent_local_config_path)"
+  upsert_config_assignment "${target_file}" "ADMIN_USER" "${username}"
+  log info "ADMIN_USER persisted to ${target_file}"
+  log info "Persistent ADMIN_USER value: ${username}"
+}
+
 prompt_stage_admin_user_value() {
   local cancel_hint="${1:-输入 0 返回：}"
   local candidate=""
@@ -98,6 +112,7 @@ confirm_stage_admin_user_selection() {
     ui_warn_message "第 4.1 段 管理用户名待确认" "当前 ADMIN_USER 为空或无效。\n当前配置来源：${config_source}\n\n现在必须重新输入管理用户名。"
     username="$(prompt_stage_admin_user_value "输入 0 返回：")" || return 1
     set_runtime_admin_user "${username}"
+    persist_stage_admin_user_selection "${username}"
     log info "Stage 4 will use admin user: ${ADMIN_USER}"
     return 0
   fi
@@ -122,6 +137,7 @@ confirm_stage_admin_user_selection() {
     if [[ "${username}" == "${original_admin_user}" ]]; then
       log info "Stage 4 will keep admin user: ${ADMIN_USER}"
     else
+      persist_stage_admin_user_selection "${username}"
       log info "Stage 4 will use updated admin user: ${ADMIN_USER}"
     fi
     return 0

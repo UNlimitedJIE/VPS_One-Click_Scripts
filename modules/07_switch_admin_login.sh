@@ -156,6 +156,13 @@ main() {
   load_config
   init_runtime
   module_banner "07_switch_admin_login" "切换为管理用户登录并关闭 root 远程登录"
+  log info "ACTIVE_CONFIG_CHAIN=${ACTIVE_CONFIG_CHAIN:-<unset>}"
+  log info "ADMIN_USER=${ADMIN_USER:-<unset>}"
+  if [[ -n "${ADMIN_USER:-}" ]] && id -u "${ADMIN_USER}" >/dev/null 2>&1; then
+    log info "Admin user exists: yes (${ADMIN_USER})"
+  else
+    log info "Admin user exists: no (${ADMIN_USER:-<unset>})"
+  fi
   require_root
   require_debian12
 

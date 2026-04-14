@@ -235,9 +235,15 @@ render_phase_overview() {
 run_script_path() {
   local path="$1"
   local name
+  local status=0
   name="$(basename "${path}")"
   log info "Running module: ${name}"
-  bash "${path}"
+  bash "${path}" || status=$?
+  if (( status != 0 )); then
+    log warn "Module failed: ${name} (exit=${status})"
+    return "${status}"
+  fi
+  return 0
 }
 
 run_module_from_registry_line() {
@@ -251,7 +257,7 @@ run_module_from_registry_line() {
     print_module_overview "${line}"
   fi
 
-  run_script_path "${PROJECT_ROOT}/${script_path}"
+  run_script_path "${PROJECT_ROOT}/${script_path}" || return $?
 }
 
 resolve_selection_token() {
@@ -371,7 +377,7 @@ run_phase_from_registry() {
       if ! is_true "${PLAN_ONLY:-false}" && registry_line_requires_admin_user "${line}"; then
         ensure_admin_user_for_execution "${cancel_mode}" || return 130
       fi
-      run_module_from_registry_line "${line}"
+      run_module_from_registry_line "${line}" || return $?
     done
     return 0
   fi
@@ -380,7 +386,7 @@ run_phase_from_registry() {
     if ! is_true "${PLAN_ONLY:-false}" && registry_line_requires_admin_user "${line}"; then
       ensure_admin_user_for_execution "${cancel_mode}" || return 130
     fi
-    run_module_from_registry_line "${line}"
+    run_module_from_registry_line "${line}" || return $?
   done < <(registry_lines "${phase}")
 }
 
@@ -632,6 +638,9 @@ menu_show_action_result() {
     success)
       body="已完成：${summary}"
       ;;
+    failure)
+      body=$'执行失败：'"${summary}"$'\n请查看上方输出或日志，然后返回菜单继续操作。'
+      ;;
     *)
       body=$'执行未完成：'"${summary}"$'\n请查看上方输出或日志，然后返回菜单继续操作。'
       ;;
@@ -665,7 +674,7 @@ menu_execute_with_feedback() {
     return 0
   fi
 
-  menu_show_action_result "incomplete" "${summary}"
+  menu_show_action_result "failure" "${summary}"
   return 1
 }
 
