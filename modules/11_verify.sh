@@ -48,10 +48,10 @@ verify_shortcut_wrapper() {
   fi
   verify_ok "Shortcut exists and is executable: ${target}"
 
-  if grep -Fq 'config/local.conf' "${target}" && grep -Fq '/opt/VPS_One-Click_Scripts' "${target}" && grep -Fq '/root/VPS_One-Click_Scripts' "${target}"; then
+  if grep -Fq '/opt/VPS_One-Click_Scripts' "${target}" && grep -Fq 'current_home="${HOME:-}"' "${target}" && grep -Fq '/root/VPS_One-Click_Scripts' "${target}" && grep -Fq 'config/local.conf' "${target}"; then
     verify_ok "Shortcut wrapper includes runtime project discovery and local.conf logic"
   else
-    verify_fail "Shortcut wrapper is missing runtime project discovery or local.conf logic"
+    verify_fail "Shortcut wrapper is missing /opt, \$HOME, /root or local.conf discovery logic"
   fi
 }
 
@@ -103,6 +103,9 @@ verify_admin_can_read_project_bootstrap() {
     verify_ok "Admin user can read project bootstrap.sh: ${PROJECT_ROOT}/bootstrap.sh"
   else
     verify_warn "Admin user cannot read project bootstrap.sh: ${PROJECT_ROOT}/bootstrap.sh"
+    if project_root_requires_shared_copy; then
+      verify_warn "当前项目位于 /root，下次切换到管理用户后无法直接使用 j；应先迁移到 /opt/VPS_One-Click_Scripts 并重装 shortcut。"
+    }
   fi
 }
 

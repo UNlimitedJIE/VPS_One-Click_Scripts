@@ -506,13 +506,15 @@ prompt_admin_user_persist_choice() {
 ensure_admin_user_for_execution() {
   local cancel_mode="${1:-command}"
   local username=""
+  local validation_error=""
 
-  if ! admin_user_needs_prompt "${ADMIN_USER:-}"; then
+  validation_error="$(admin_user_validation_error "${ADMIN_USER:-}")"
+  if [[ -n "${ADMIN_USER:-}" && -z "${validation_error}" ]]; then
     return 0
   fi
 
   if ! ui_require_interactive; then
-    die "当前 ADMIN_USER 为空或仍为默认值 ${DEFAULT_ADMIN_USER}。请使用交互式终端输入管理用户名，或在配置文件中设置 ADMIN_USER。"
+    die "当前 ADMIN_USER 为空或无效。请使用交互式终端输入管理用户名，或在配置文件中设置有效的 ADMIN_USER。"
   fi
 
   username="$(prompt_admin_user_value "${cancel_mode}" || true)"
@@ -681,7 +683,7 @@ fi
 
 cd "${PROJECT_ROOT}"
 
-if [[ -f "${PROJECT_ROOT}/config/local.conf" ]]; then
+if [[ -r "${PROJECT_ROOT}/config/local.conf" ]]; then
   exec bash "${PROJECT_ROOT}/bootstrap.sh" menu --config "${PROJECT_ROOT}/config/local.conf" "$@"
 fi
 
@@ -729,12 +731,12 @@ install_shortcut() {
     fi
 
     log warn "Shortcut already exists: ${target}"
-    if ! ui_require_interactive; then
+    if [[ "${SHORTCUT_FORCE_OVERWRITE:-false}" == "true" ]]; then
+      log info "SHORTCUT_FORCE_OVERWRITE=true, shortcut will be overwritten without interactive confirmation."
+    elif ! ui_require_interactive; then
       rm -f "${temp_file}"
       die "${target} already exists. Rerun in an interactive terminal to confirm overwrite, or remove it manually."
-    fi
-
-    if ! ui_confirm_text "覆盖 j 命令" "${target} 已存在。\n\n输入 yes 覆盖；输入其他内容跳过安装。"; then
+    elif ! ui_confirm_text "覆盖 j 命令" "${target} 已存在。\n\n输入 yes 覆盖；输入其他内容跳过安装。"; then
       log info "Skipped installing shortcut: ${target}"
       rm -f "${temp_file}"
       return 0

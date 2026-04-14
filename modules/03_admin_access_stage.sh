@@ -40,6 +40,93 @@ confirm_stage_checkpoint() {
   done
 }
 
+stage_config_source_label() {
+  printf '%s\n' "${ACTIVE_CONFIG_CHAIN:-${CONFIG_FILE:-<未设置>}}"
+}
+
+prompt_stage_admin_user_value() {
+  local cancel_hint="${1:-输入 0 返回：}"
+  local candidate=""
+  local validation_error=""
+
+  while true; do
+    if ! ui_prompt_input "管理用户名" "请输入要创建/使用的管理用户名（仅限字母、数字、下划线、短横线，且不能为 root）：\n${cancel_hint}"; then
+      return 1
+    fi
+
+    candidate="$(ui_trim_value "${UI_LAST_INPUT}")"
+    if [[ "${candidate}" == "0" ]]; then
+      return 1
+    fi
+
+    validation_error="$(admin_user_validation_error "${candidate}")"
+    if [[ -n "${validation_error}" ]]; then
+      ui_warn_message "输入无效" "${validation_error}"
+      continue
+    fi
+
+    printf '%s\n' "${candidate}"
+    return 0
+  done
+}
+
+confirm_stage_admin_user_selection() {
+  local validation_error=""
+  local answer=""
+  local username=""
+  local config_source=""
+
+  config_source="$(stage_config_source_label)"
+  validation_error="$(admin_user_validation_error "${ADMIN_USER:-}")"
+
+  if is_true "${PLAN_ONLY:-false}" || is_true "${DRY_RUN:-false}"; then
+    if [[ -z "${validation_error}" ]]; then
+      log info "[plan] 当前将沿用管理用户名：${ADMIN_USER}"
+      log info "[plan] 当前配置来源：${config_source}"
+    else
+      log info "[plan] 当前 ADMIN_USER 无效，真实执行时将要求重新输入。"
+      log info "[plan] 当前配置来源：${config_source}"
+    fi
+    return 0
+  fi
+
+  ui_require_interactive || die "第 4 步需要交互式确认管理用户名，请在交互式终端中执行。"
+
+  if [[ -n "${validation_error}" ]]; then
+    ui_warn_message "管理用户名待确认" "当前 ADMIN_USER 为空或无效。\n当前配置来源：${config_source}\n\n现在必须重新输入管理用户名。"
+    username="$(prompt_stage_admin_user_value "输入 0 返回：")" || return 1
+    set_runtime_admin_user "${username}"
+    log info "Stage 4 will use admin user: ${ADMIN_USER}"
+    return 0
+  fi
+
+  while true; do
+    if ! ui_prompt_input "确认管理用户名" "当前将沿用的管理用户名：${ADMIN_USER}\n当前配置来源：${config_source}\n\n输入 yes 继续沿用\n输入 change 重新输入用户名\n输入 0 返回" "yes"; then
+      return 1
+    fi
+
+    answer="$(ui_trim_value "${UI_LAST_INPUT}")"
+    case "${answer}" in
+      yes|YES|y|Y)
+        log info "Stage 4 will keep admin user: ${ADMIN_USER}"
+        return 0
+        ;;
+      change|CHANGE)
+        username="$(prompt_stage_admin_user_value "输入 0 返回：")" || return 1
+        set_runtime_admin_user "${username}"
+        log info "Stage 4 will use updated admin user: ${ADMIN_USER}"
+        return 0
+        ;;
+      0)
+        return 1
+        ;;
+      *)
+        ui_warn_message "输入无效" "请输入 yes、change 或 0。"
+        ;;
+    esac
+  done
+}
+
 stage_intro_body() {
   cat <<EOF
 这一步会按顺序完成以下动作：
@@ -142,6 +229,7 @@ main() {
   log info "AUTHORIZED_KEYS_FILE=${AUTHORIZED_KEYS_FILE:-<empty>}"
   log info "SSH_PORT=${SSH_PORT:-<unset>}"
 
+  confirm_stage_admin_user_selection || die "管理用户与 SSH 接入阶段已取消。"
   confirm_stage_checkpoint "管理用户与 SSH 接入阶段" "$(stage_intro_body)" || die "管理用户与 SSH 接入阶段已取消。"
 
   bash "${SCRIPT_DIR}/03_admin_user.sh"

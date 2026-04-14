@@ -189,6 +189,14 @@ bootstrap_authorized_keys_fallback_path() {
   printf '/root/bootstrap_authorized_keys\n'
 }
 
+shared_project_root() {
+  printf '/opt/VPS_One-Click_Scripts\n'
+}
+
+project_root_requires_shared_copy() {
+  [[ "${PROJECT_ROOT}" == "/root" || "${PROJECT_ROOT}" == /root/* ]]
+}
+
 admin_ssh_dir_for_user() {
   local user="${1:-${ADMIN_USER:-}}"
   local home_dir=""

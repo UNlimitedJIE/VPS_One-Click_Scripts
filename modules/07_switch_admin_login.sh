@@ -77,6 +77,47 @@ ensure_cutover_prerequisites() {
   [[ "${effective_port}" =~ ^[0-9]+$ ]] || die "当前 SSH 端口无法识别，不能继续关闭 root 远程登录。"
 }
 
+prepare_project_access_for_cutover() {
+  local sync_target=""
+  local bootstrap_file=""
+  local local_config_file=""
+
+  if ! project_root_requires_shared_copy; then
+    log info "Current project root is not under /root; no project migration is required before cutover."
+    return 0
+  fi
+
+  sync_target="$(shared_project_root)"
+  bootstrap_file="${sync_target}/bootstrap.sh"
+  local_config_file="${sync_target}/config/local.conf"
+
+  log info "Current project root is under /root. Project will be synchronized to ${sync_target} before cutover."
+
+  if is_true "${PLAN_ONLY:-false}" || is_true "${DRY_RUN:-false}"; then
+    log info "[plan] install -d -m 0755 ${sync_target}"
+    log info "[plan] rsync -a ${PROJECT_ROOT}/ ${sync_target}/"
+    log info "[plan] chmod -R a+rX ${sync_target}"
+    log info "[plan] env SHORTCUT_FORCE_OVERWRITE=true bash ${sync_target}/bootstrap.sh install-shortcut"
+    return 0
+  fi
+
+  apt_install_packages rsync
+  run_cmd "Ensuring shared project root ${sync_target}" install -d -m 0755 "${sync_target}"
+  run_cmd "Syncing project from ${PROJECT_ROOT} to ${sync_target}" rsync -a "${PROJECT_ROOT}/" "${sync_target}/"
+  run_cmd "Ensuring synced project is readable for non-root admins" chmod -R a+rX "${sync_target}"
+  run_cmd "Refreshing shortcut j from shared project root" env SHORTCUT_FORCE_OVERWRITE=true bash "${sync_target}/bootstrap.sh" install-shortcut
+
+  sudo -u "${ADMIN_USER}" test -x "${sync_target}" || die "管理用户 ${ADMIN_USER} 无法进入 ${sync_target}，不能继续关闭 root 远程登录。"
+  sudo -u "${ADMIN_USER}" test -r "${bootstrap_file}" || die "管理用户 ${ADMIN_USER} 无法读取 ${bootstrap_file}，不能继续关闭 root 远程登录。"
+  if [[ -f "${local_config_file}" ]]; then
+    sudo -u "${ADMIN_USER}" test -r "${local_config_file}" || die "管理用户 ${ADMIN_USER} 无法读取 ${local_config_file}，cutover 后将无法直接使用 j。"
+  fi
+  [[ -x /usr/local/bin/j ]] || die "Shortcut j was not refreshed successfully: /usr/local/bin/j"
+
+  log info "Shared project root is ready for admin user: ${sync_target}"
+  log info "Shortcut j has been refreshed and will prefer ${sync_target} after cutover."
+}
+
 cutover_summary_body() {
   local effective_port=""
   effective_port="$(effective_ssh_port_for_changes)"
@@ -104,6 +145,7 @@ main() {
   require_debian12
 
   ensure_cutover_prerequisites
+  prepare_project_access_for_cutover
   confirm_cutover_execution || return $?
 
   local target_file=""
