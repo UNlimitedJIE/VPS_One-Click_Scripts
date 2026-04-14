@@ -22,7 +22,7 @@ set_default_config() {
   ADMIN_USER_SHELL="${ADMIN_USER_SHELL:-/bin/bash}"
   ADMIN_USER_GROUPS="${ADMIN_USER_GROUPS:-sudo}"
   ADMIN_SUDO_MODE_DEFAULT="${ADMIN_SUDO_MODE_DEFAULT:-nopasswd}"
-  AUTHORIZED_KEYS_FILE="${AUTHORIZED_KEYS_FILE:-}"
+  AUTHORIZED_KEYS_FILE="${AUTHORIZED_KEYS_FILE:-$(preferred_authorized_keys_source_path)}"
   DISABLE_PASSWORD_LOGIN="${DISABLE_PASSWORD_LOGIN:-true}"
   DISABLE_ROOT_SSH_PASSWORD="${DISABLE_ROOT_SSH_PASSWORD:-true}"
   INSTALL_FAIL2BAN="${INSTALL_FAIL2BAN:-true}"
@@ -186,7 +186,7 @@ active_config_file_path() {
 }
 
 bootstrap_authorized_keys_fallback_path() {
-  printf '/root/bootstrap_authorized_keys\n'
+  preferred_authorized_keys_source_path
 }
 
 preferred_authorized_keys_source_path() {

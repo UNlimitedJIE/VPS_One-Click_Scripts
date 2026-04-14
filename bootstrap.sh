@@ -300,6 +300,47 @@ normalize_selection_list_safe() {
   printf '%s\n' "${normalized_ids[@]}"
 }
 
+base_prerequisites_look_satisfied() {
+  local base_updated=""
+  local pkg=""
+  local -a critical_packages=(
+    ca-certificates
+    curl
+    sudo
+    rsync
+    git
+    procps
+  )
+
+  base_updated="$(get_state "BASE_UPDATED" || true)"
+  [[ -n "${base_updated}" ]] && return 0
+
+  for pkg in "${critical_packages[@]}"; do
+    package_installed "${pkg}" || return 1
+  done
+
+  return 0
+}
+
+log_missing_dependency_notice() {
+  local module_id="$1"
+  local dependency="$2"
+  local base_updated=""
+
+  if [[ "${dependency}" == "02_update_base" ]]; then
+    base_updated="$(get_state "BASE_UPDATED" || true)"
+    if [[ -n "${base_updated}" ]]; then
+      return 0
+    fi
+    if base_prerequisites_look_satisfied; then
+      log info "Selected ${module_id} but missing explicit dependency ${dependency}; base prerequisites look satisfied, and explicit step-2 completion state was not found."
+      return 0
+    fi
+  fi
+
+  log warn "Selected ${module_id} but missing dependency ${dependency}. The script can still be run, but you should confirm prerequisites manually."
+}
+
 warn_missing_dependencies() {
   local phase="$1"
   shift || true
@@ -317,7 +358,7 @@ warn_missing_dependencies() {
     for dependency in "${dep_list[@]}"; do
       [[ -n "${dependency}" ]] || continue
       if ! selection_contains "${dependency}" "${selected[@]}"; then
-        log warn "Selected ${module_id} but missing dependency ${dependency}. The script can still be run, but you should confirm prerequisites manually."
+        log_missing_dependency_notice "${module_id}" "${dependency}"
       fi
     done
   done < <(registry_lines "${phase}")

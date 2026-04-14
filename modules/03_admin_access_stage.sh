@@ -176,8 +176,13 @@ stage_connection_summary() {
   local effective_port=""
   local auth_ready="no"
   local safe_gate_state=""
+  local admin_ready="no"
   effective_port="$(effective_ssh_port_for_changes)"
   safe_gate_state="$(get_state "SSH_SAFE_GATE_PASSED" || true)"
+
+  if [[ -n "${ADMIN_USER:-}" ]] && id -u "${ADMIN_USER}" >/dev/null 2>&1; then
+    admin_ready="yes"
+  fi
 
   if [[ -n "${ADMIN_USER:-}" ]] && admin_authorized_keys_ready_for_user "${ADMIN_USER}"; then
     auth_ready="yes"
@@ -206,12 +211,14 @@ EOF
 
 当前状态：
 - 用户名：${ADMIN_USER:-<未设置>}
+- 管理用户已创建：${admin_ready}
 - SSH 端口：${effective_port}
 - 目标账户公钥已安装：${auth_ready}
 - SSH safe gate：${safe_gate_state:-no}
+- 最终收口可执行：$( [[ "${auth_ready}" == "yes" && "${safe_gate_state}" == "yes" ]] && printf 'yes' || printf 'no' )
 
 结论：
-- 管理用户已创建，但公钥尚未安装到目标账户 / 当前未满足最终收口条件
+- admin user created / target authorized_keys not installed yet / final cutover not yet eligible
 - 请先修复目标账户 ${ADMIN_USER:-<未设置>} 的 authorized_keys，再重新执行第 4 步验证
 - 在确认新连接可用前，不要继续执行关闭 root 远程登录的收口步骤
 EOF

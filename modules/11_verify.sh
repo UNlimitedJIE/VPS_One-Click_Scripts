@@ -24,6 +24,11 @@ verify_warn() {
   warnings=$((warnings + 1))
 }
 
+verify_pending() {
+  log info "[PENDING] $*"
+  pending=$((pending + 1))
+}
+
 verify_fail() {
   log_raw "ERROR" "[FAIL] $*"
   failures=$((failures + 1))
@@ -72,12 +77,12 @@ verify_project_copy_layout() {
   if [[ -n "${runtime_root}" ]]; then
     verify_ok "Preferred runtime project root=${runtime_root}"
   else
-    verify_warn "No readable runtime project root detected in /opt, \$HOME or /root"
+    verify_pending "No readable runtime project root detected in /opt, \$HOME or /root"
   fi
 
   mapfile -t copies < <(list_detected_project_copies)
   if ((${#copies[@]} == 0)); then
-    verify_warn "No project copies detected in /opt, \$HOME or /root"
+    verify_pending "No project copies detected in /opt, \$HOME or /root"
   else
     verify_ok "Detected project copies: ${copies[*]}"
   fi
@@ -131,12 +136,16 @@ verify_configured_runtime_values() {
   if [[ -n "${ADMIN_USER:-}" ]]; then
     verify_ok "Configured ADMIN_USER=${ADMIN_USER}"
   else
-    verify_warn "Configured ADMIN_USER is empty"
+    verify_pending "Configured ADMIN_USER is empty"
   fi
 
   if [[ -n "${AUTHORIZED_KEYS_FILE:-}" ]]; then
     if [[ -f "${AUTHORIZED_KEYS_FILE}" ]]; then
-      verify_ok "Configured AUTHORIZED_KEYS_FILE=${AUTHORIZED_KEYS_FILE}"
+      if [[ "$(count_valid_ssh_keys_in_file "${AUTHORIZED_KEYS_FILE}")" -gt 0 ]]; then
+        verify_ok "Configured AUTHORIZED_KEYS_FILE=${AUTHORIZED_KEYS_FILE}"
+      else
+        verify_pending "Configured AUTHORIZED_KEYS_FILE has no valid public key yet: ${AUTHORIZED_KEYS_FILE}"
+      fi
     elif [[ "${target_keys_ready}" == "yes" ]]; then
       if authorized_keys_source_is_root_only_path "${AUTHORIZED_KEYS_FILE}"; then
         log info "[INFO] AUTHORIZED_KEYS_FILE 当前指向 /root 下路径；若目标账户 authorized_keys 已安装，可忽略此提示。"
@@ -144,11 +153,13 @@ verify_configured_runtime_values() {
       else
         log info "[INFO] AUTHORIZED_KEYS_FILE 源文件当前不可访问或不存在，但目标账户 authorized_keys 已安装完成。"
       fi
+    elif authorized_keys_source_is_root_only_path "${AUTHORIZED_KEYS_FILE}"; then
+      verify_pending "Configured AUTHORIZED_KEYS_FILE points to /root and is not ready yet: ${AUTHORIZED_KEYS_FILE}. Normal flow should use $(preferred_authorized_keys_source_path)."
     else
-      verify_warn "Configured AUTHORIZED_KEYS_FILE does not exist: ${AUTHORIZED_KEYS_FILE}"
+      verify_pending "Configured AUTHORIZED_KEYS_FILE is not ready yet: ${AUTHORIZED_KEYS_FILE}"
     fi
   else
-    verify_warn "Configured AUTHORIZED_KEYS_FILE is empty"
+    verify_pending "Configured AUTHORIZED_KEYS_FILE is empty"
   fi
 }
 
@@ -157,12 +168,12 @@ verify_admin_can_read_project_bootstrap() {
   local target_root=""
 
   if [[ -z "${ADMIN_USER}" ]]; then
-    verify_warn "ADMIN_USER is empty; skip project readability check"
+    verify_pending "ADMIN_USER is empty; skip project readability check"
     return 0
   fi
 
   if ! id -u "${ADMIN_USER}" >/dev/null 2>&1; then
-    verify_warn "Admin user missing; skip project readability check: ${ADMIN_USER}"
+    verify_pending "Admin user missing; skip project readability check: ${ADMIN_USER}"
     return 0
   fi
 
@@ -201,12 +212,12 @@ verify_admin_sudo_behavior() {
   local sudo_status=0
 
   if [[ -z "${ADMIN_USER}" ]]; then
-    verify_warn "ADMIN_USER is empty; skip sudo behavior check"
+    verify_pending "ADMIN_USER is empty; skip sudo behavior check"
     return 0
   fi
 
   if ! id -u "${ADMIN_USER}" >/dev/null 2>&1; then
-    verify_warn "Admin user missing; skip sudo behavior check: ${ADMIN_USER}"
+    verify_pending "Admin user missing; skip sudo behavior check: ${ADMIN_USER}"
     return 0
   fi
 
@@ -263,6 +274,8 @@ verify_sshd_effective_settings() {
   local permit_root_login=""
   local port=""
   local runtime_port=""
+  local safe_gate_state=""
+  local cutover_state=""
 
   if ! command_exists sshd; then
     verify_fail "sshd command not found"
@@ -279,10 +292,16 @@ verify_sshd_effective_settings() {
   permit_root_login="$(sshd_effective_value "permitrootlogin" "${sshd_output}")"
   port="$(sshd_effective_value "port" "${sshd_output}")"
   runtime_port="$(current_ssh_port)"
+  safe_gate_state="$(get_state "SSH_SAFE_GATE_PASSED" || true)"
+  cutover_state="$(get_state "ADMIN_LOGIN_CUTOVER" || true)"
 
   if [[ -n "${password_auth}" ]]; then
     if [[ "${password_auth}" == "no" ]]; then
       verify_ok "sshd -T passwordauthentication=${password_auth}"
+    elif is_false "${DISABLE_PASSWORD_LOGIN}" ; then
+      verify_ok "sshd -T passwordauthentication=${password_auth} (intentionally left enabled)"
+    elif is_true "${DISABLE_PASSWORD_LOGIN}" && [[ "${safe_gate_state}" != "yes" ]]; then
+      verify_pending "sshd -T passwordauthentication=${password_auth}; safe gate not passed yet, so password login still remains enabled during preparation"
     else
       verify_warn "sshd -T passwordauthentication=${password_auth}"
     fi
@@ -301,6 +320,8 @@ verify_sshd_effective_settings() {
   if [[ -n "${permit_root_login}" ]]; then
     if [[ "${permit_root_login}" == "no" ]]; then
       verify_ok "sshd -T permitrootlogin=${permit_root_login}"
+    elif [[ "${cutover_state}" != "yes" ]]; then
+      verify_pending "sshd -T permitrootlogin=${permit_root_login}; final cutover has not been completed yet"
     else
       verify_warn "sshd -T permitrootlogin=${permit_root_login}"
     fi
@@ -338,12 +359,12 @@ verify_admin_authorized_keys_target() {
   local fallback_source=""
 
   if [[ -z "${ADMIN_USER}" ]]; then
-    verify_warn "ADMIN_USER is empty; skip .ssh permission checks"
+    verify_pending "ADMIN_USER is empty; skip .ssh permission checks"
     return 0
   fi
 
   if ! id -u "${ADMIN_USER}" >/dev/null 2>&1; then
-    verify_warn "Admin user missing; skip .ssh permission checks: ${ADMIN_USER}"
+    verify_pending "Admin user missing; skip .ssh permission checks: ${ADMIN_USER}"
     return 0
   fi
 
@@ -355,10 +376,15 @@ verify_admin_authorized_keys_target() {
 
   ssh_dir="${home_dir}/.ssh"
   auth_file="${ssh_dir}/authorized_keys"
+  safe_gate_state="$(get_state "SSH_SAFE_GATE_PASSED" || true)"
   verify_ok "Target authorized_keys path=${auth_file}"
 
   if [[ ! -d "${ssh_dir}" ]]; then
-    verify_warn "SSH directory missing: ${ssh_dir}"
+    if [[ "${safe_gate_state}" == "yes" ]]; then
+      verify_fail "SSH directory missing even though SSH_SAFE_GATE_PASSED=yes: ${ssh_dir}"
+    else
+      verify_pending "SSH directory missing: ${ssh_dir}"
+    fi
   else
     ssh_owner_mode="$(stat -c '%U:%G %a' "${ssh_dir}" 2>/dev/null || true)"
     if [[ "${ssh_owner_mode}" == "${ADMIN_USER}:${ADMIN_USER} 700" ]]; then
@@ -377,30 +403,45 @@ verify_admin_authorized_keys_target() {
       verify_fail "authorized_keys ownership/mode mismatch for ${auth_file}: ${auth_owner_mode:-<unknown>}"
     fi
   else
-    verify_warn "authorized_keys missing: ${auth_file}"
+    if [[ "${safe_gate_state}" == "yes" ]]; then
+      verify_fail "authorized_keys missing even though SSH_SAFE_GATE_PASSED=yes: ${auth_file}"
+    else
+      verify_pending "authorized_keys missing: ${auth_file}"
+    fi
   fi
 
   key_count="$(count_valid_ssh_keys_in_file "${auth_file}")"
   if [[ "${key_count}" -gt 0 ]]; then
     verify_ok "Valid authorized_keys count for ${ADMIN_USER}: ${key_count}"
   else
-    verify_warn "Valid authorized_keys count for ${ADMIN_USER}: ${key_count}"
+    if [[ "${safe_gate_state}" == "yes" ]]; then
+      verify_fail "Valid authorized_keys count for ${ADMIN_USER} is 0 even though SSH_SAFE_GATE_PASSED=yes"
+    else
+      verify_pending "Valid authorized_keys count for ${ADMIN_USER}: ${key_count}"
+    fi
   fi
 
-  safe_gate_state="$(get_state "SSH_SAFE_GATE_PASSED" || true)"
   if [[ "${safe_gate_state}" == "yes" ]]; then
     verify_ok "SSH_SAFE_GATE_PASSED=${safe_gate_state}"
   else
-    verify_warn "SSH_SAFE_GATE_PASSED=${safe_gate_state:-<unset>}"
+    verify_pending "SSH_SAFE_GATE_PASSED=${safe_gate_state:-<unset>}"
   fi
 
   if [[ -n "${AUTHORIZED_KEYS_FILE:-}" && -f "${AUTHORIZED_KEYS_FILE}" && ! -f "${auth_file}" ]]; then
-    verify_warn "Configured AUTHORIZED_KEYS_FILE exists, but target authorized_keys is missing: ${AUTHORIZED_KEYS_FILE} -> ${auth_file}"
+    if [[ "${safe_gate_state}" == "yes" ]]; then
+      verify_warn "Configured AUTHORIZED_KEYS_FILE exists, but target authorized_keys is missing: ${AUTHORIZED_KEYS_FILE} -> ${auth_file}"
+    else
+      verify_pending "Configured AUTHORIZED_KEYS_FILE exists, but target authorized_keys is missing: ${AUTHORIZED_KEYS_FILE} -> ${auth_file}"
+    fi
   fi
 
   fallback_source="$(bootstrap_authorized_keys_fallback_path)"
   if [[ -z "${AUTHORIZED_KEYS_FILE:-}" && -f "${fallback_source}" && ! -f "${auth_file}" ]]; then
-    verify_warn "Fallback authorized_keys source exists, but target authorized_keys is missing: ${fallback_source} -> ${auth_file}"
+    if [[ "${safe_gate_state}" == "yes" ]]; then
+      verify_warn "Fallback authorized_keys source exists, but target authorized_keys is missing: ${fallback_source} -> ${auth_file}"
+    else
+      verify_pending "Fallback authorized_keys source exists, but target authorized_keys is missing: ${fallback_source} -> ${auth_file}"
+    fi
   fi
 }
 
@@ -412,6 +453,8 @@ main() {
 
   local warnings=0
   local failures=0
+  local pending=0
+  local cutover_state=""
 
   verify_active_config_chain
   verify_project_copy_layout
@@ -426,13 +469,13 @@ main() {
   if [[ -n "${ADMIN_USER}" ]] && id -u "${ADMIN_USER}" >/dev/null 2>&1; then
     verify_ok "Admin user exists: ${ADMIN_USER}"
   else
-    verify_warn "Admin user missing: ${ADMIN_USER}"
+    verify_pending "Admin user missing: ${ADMIN_USER}"
   fi
 
   if [[ -n "${ADMIN_USER}" ]] && authorized_keys_present_for_user "${ADMIN_USER}"; then
     verify_ok "authorized_keys detected for ${ADMIN_USER}"
   else
-    verify_warn "No valid authorized_keys detected for ${ADMIN_USER:-<unset>}"
+    verify_pending "No valid authorized_keys detected for ${ADMIN_USER:-<unset>}"
   fi
 
   if command_exists sshd && sshd -t >/dev/null 2>&1; then
@@ -441,10 +484,13 @@ main() {
     verify_fail "sshd configuration test failed"
   fi
 
+  cutover_state="$(get_state "ADMIN_LOGIN_CUTOVER" || true)"
   if root_ssh_login_disabled; then
     verify_ok "Root remote SSH login is disabled"
-  else
+  elif [[ "${cutover_state}" == "yes" ]]; then
     verify_warn "Root remote SSH login is still allowed"
+  else
+    verify_pending "Root remote SSH login is still allowed; final cutover has not been completed yet"
   fi
 
   if ssh_port_change_pending_confirmation; then
@@ -486,11 +532,12 @@ main() {
 
   set_state "VERIFY_WARNINGS" "${warnings}"
   set_state "VERIFY_FAILURES" "${failures}"
+  set_state "VERIFY_PENDING" "${pending}"
 
   if (( failures > 0 )); then
-    log warn "Verification finished with ${failures} failure(s) and ${warnings} warning(s)."
+    log warn "Verification finished with ${failures} failure(s), ${warnings} warning(s), and ${pending} pending item(s)."
   else
-    log info "Verification finished with ${warnings} warning(s)."
+    log info "Verification finished with ${warnings} warning(s) and ${pending} pending item(s)."
   fi
 }
 

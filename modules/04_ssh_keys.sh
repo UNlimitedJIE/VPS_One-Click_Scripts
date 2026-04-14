@@ -16,6 +16,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
 source "${SCRIPT_DIR}/../lib/common.sh"
+# shellcheck source=../lib/ui.sh
+source "${SCRIPT_DIR}/../lib/ui.sh"
 
 fail_authorized_keys_install() {
   set_state "AUTHORIZED_KEYS_PRESENT" "no"
@@ -24,25 +26,110 @@ fail_authorized_keys_install() {
 }
 
 resolve_authorized_keys_source() {
-  local fallback_file=""
+  local source_file=""
+  source_file="$(bootstrap_authorized_keys_fallback_path)"
+  if [[ -n "${AUTHORIZED_KEYS_FILE:-}" ]]; then
+    source_file="${AUTHORIZED_KEYS_FILE}"
+  fi
 
-  if [[ -n "${AUTHORIZED_KEYS_FILE}" ]]; then
-    validate_authorized_keys_file "${AUTHORIZED_KEYS_FILE}"
-    printf '%s\n' "${AUTHORIZED_KEYS_FILE}"
+  if [[ -f "${source_file}" && "$(count_valid_ssh_keys_in_file "${source_file}")" -gt 0 ]]; then
+    printf '%s\n' "${source_file}"
     return 0
   fi
 
-  fallback_file="$(bootstrap_authorized_keys_fallback_path)"
-  if [[ -f "${fallback_file}" ]]; then
-    if [[ "$(count_valid_ssh_keys_in_file "${fallback_file}")" -gt 0 ]]; then
-      log warn "AUTHORIZED_KEYS_FILE is empty. Using temporary fallback source: ${fallback_file}"
-      printf '%s\n' "${fallback_file}"
-      return 0
-    fi
-    log warn "Fallback authorized_keys source exists but contains no valid public keys: ${fallback_file}"
+  return 1
+}
+
+authorized_keys_source_status_message() {
+  local source_file="$1"
+
+  if [[ ! -e "${source_file}" ]]; then
+    printf '当前公钥源文件不存在：%s\n' "${source_file}"
+    return 0
   fi
 
-  return 1
+  if [[ ! -s "${source_file}" ]]; then
+    printf '当前公钥源文件为空：%s\n' "${source_file}"
+    return 0
+  fi
+
+  printf '当前公钥源文件里没有检测到有效公钥：%s\n' "${source_file}"
+}
+
+single_line_ssh_public_key_is_valid() {
+  local key_line=""
+  local tmp_file=""
+  local key_count="0"
+
+  key_line="$(ui_trim_value "${1:-}")"
+  [[ -n "${key_line}" ]] || return 1
+  [[ "${key_line}" != *$'\n'* ]] || return 1
+
+  tmp_file="$(mktemp)"
+  printf '%s\n' "${key_line}" >"${tmp_file}"
+  key_count="$(count_valid_ssh_keys_in_file "${tmp_file}")"
+  rm -f "${tmp_file}"
+
+  [[ "${key_count}" -gt 0 ]]
+}
+
+capture_authorized_keys_source_via_paste() {
+  local source_file=""
+  local source_dir=""
+  local prompt_body=""
+  local pasted_key=""
+
+  source_file="$(preferred_authorized_keys_source_path)"
+  source_dir="$(dirname "${source_file}")"
+
+  if is_true "${PLAN_ONLY:-false}" || is_true "${DRY_RUN:-false}"; then
+    log info "[plan] if ${source_file} is missing or invalid, real execution will prompt for a single-line SSH public key and write it to ${source_file}"
+    return 1
+  fi
+
+  ui_require_interactive || die "当前公钥源文件无效，且当前不是交互式终端，无法现场粘贴 SSH 公钥。请先写入 ${source_file}。"
+
+  prompt_body="$(cat <<EOF
+$(authorized_keys_source_status_message "${AUTHORIZED_KEYS_FILE:-${source_file}}")
+
+是否现在粘贴 SSH 公钥？
+
+- yes：现在粘贴一整行公钥
+- no：暂不粘贴，跳过本次自动安装
+EOF
+)"
+
+  if ! ui_confirm_text "SSH 公钥导入源缺失" "${prompt_body}"; then
+    return 1
+  fi
+
+  while true; do
+    if ! ui_prompt_input "粘贴 SSH 公钥" "请粘贴一整行 SSH 公钥（例如 ssh-ed25519 ... 或 ssh-rsa ...）。\n输入 0 取消：" ""; then
+      return 1
+    fi
+
+    pasted_key="$(ui_trim_value "${UI_LAST_INPUT}")"
+    case "${pasted_key}" in
+      0)
+        return 1
+        ;;
+      "")
+        ui_warn_message "输入为空" "请粘贴一整行 SSH 公钥，或输入 0 取消。"
+        ;;
+      *)
+        if single_line_ssh_public_key_is_valid "${pasted_key}"; then
+          ensure_directory "${source_dir}" "0755" "root" "root"
+          apply_managed_file "${source_file}" "0644" "${pasted_key}" "false"
+          AUTHORIZED_KEYS_FILE="${source_file}"
+          export_config
+          log info "Authorized keys source file prepared: ${source_file}"
+          printf '%s\n' "${source_file}"
+          return 0
+        fi
+        ui_warn_message "公钥无效" "只支持一整行 SSH 公钥，例如 ssh-ed25519 ... 或 ssh-rsa ...。你可以重试，或输入 0 取消。"
+        ;;
+    esac
+  done
 }
 
 validate_authorized_keys_target_install() {
@@ -118,9 +205,12 @@ main() {
       return 0
     fi
 
-    log warn "AUTHORIZED_KEYS_FILE is empty and no valid fallback source is available. Skip automatic key installation."
-    log warn "Manual action: upload a public key file or create /root/bootstrap_authorized_keys, then rerun 04_ssh_keys before tightening SSH."
-    log info "Suggestion: for future non-root maintenance, move the source file to $(preferred_authorized_keys_source_path) and update AUTHORIZED_KEYS_FILE."
+    source_file="$(capture_authorized_keys_source_via_paste || true)"
+  fi
+
+  if [[ -z "${source_file}" ]]; then
+    log info "No valid authorized_keys source is currently available. SSH public key installation is skipped for now."
+    log info "Preferred source path: $(preferred_authorized_keys_source_path)"
     set_state "AUTHORIZED_KEYS_PRESENT" "no"
     set_state "AUTHORIZED_KEYS_COUNT" "0"
     return 0

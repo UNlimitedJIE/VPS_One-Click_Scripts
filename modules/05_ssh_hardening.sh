@@ -30,11 +30,17 @@ main() {
   local password_auth="yes"
   local kbd_auth="yes"
   local safe_gate_passed="no"
+  local admin_user_ready="no"
+  local target_keys_ready="no"
   local runtime_port=""
   local target_port_listening="no"
 
-  if [[ -n "${ADMIN_USER}" ]] && id -u "${ADMIN_USER}" >/dev/null 2>&1 && admin_authorized_keys_ready_for_user "${ADMIN_USER}"; then
-    safe_gate_passed="yes"
+  if [[ -n "${ADMIN_USER}" ]] && id -u "${ADMIN_USER}" >/dev/null 2>&1; then
+    admin_user_ready="yes"
+    if admin_authorized_keys_ready_for_user "${ADMIN_USER}"; then
+      target_keys_ready="yes"
+      safe_gate_passed="yes"
+    fi
   fi
 
   set_state "SSH_SAFE_GATE_PASSED" "${safe_gate_passed}"
@@ -45,8 +51,8 @@ main() {
       kbd_auth="no"
       log info "Safe gate passed. Password-based SSH login will be disabled."
     else
-      log warn "Safe gate not passed. Password login will remain enabled."
-      log warn "Required: admin user exists and the target authorized_keys is installed with at least one valid public key."
+      log info "Safe gate not passed yet. Password login will remain enabled for now."
+      log info "Stage status: admin user created=${admin_user_ready}, target authorized_keys installed=${target_keys_ready}, final cutover eligible=no"
     fi
   fi
 

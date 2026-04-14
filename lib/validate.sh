@@ -167,6 +167,7 @@ validate_config() {
 
   local admin_user_error=""
   local target_keys_ready="no"
+  local preferred_source=""
   if [[ -n "${ADMIN_USER}" ]]; then
     admin_user_error="$(admin_user_validation_error "${ADMIN_USER}")"
     [[ -z "${admin_user_error}" ]] || die "${admin_user_error}"
@@ -174,24 +175,29 @@ validate_config() {
       target_keys_ready="yes"
     fi
   fi
+  preferred_source="$(preferred_authorized_keys_source_path)"
 
   if [[ -n "${AUTHORIZED_KEYS_FILE}" && ! -f "${AUTHORIZED_KEYS_FILE}" ]]; then
     if authorized_keys_source_is_root_only_path "${AUTHORIZED_KEYS_FILE}" && [[ "${EUID}" -ne 0 ]]; then
       if [[ "${target_keys_ready}" == "yes" ]]; then
         log info "AUTHORIZED_KEYS_FILE 当前指向 /root 下路径，非 root 用户不可访问；若目标账户 authorized_keys 已安装，可忽略此提示。"
       else
-        log warn "AUTHORIZED_KEYS_FILE 当前指向 /root 下路径，非 root 用户不可访问；若尚未安装到目标账户，建议改用可读路径，例如 $(preferred_authorized_keys_source_path)。"
+        log info "AUTHORIZED_KEYS_FILE 当前指向 /root 下路径；正常流程建议改用 ${preferred_source}，第 4 步也可直接粘贴公钥写入该固定路径。"
       fi
     elif [[ "${target_keys_ready}" == "yes" ]]; then
       log info "AUTHORIZED_KEYS_FILE 源文件当前不可访问或不存在，但目标账户 authorized_keys 已安装完成。"
     else
-      log warn "AUTHORIZED_KEYS_FILE does not exist yet: ${AUTHORIZED_KEYS_FILE}"
+      log info "AUTHORIZED_KEYS_FILE 源文件尚未准备好：${AUTHORIZED_KEYS_FILE}。第 4 步可直接粘贴 SSH 公钥并写入 ${preferred_source}。"
     fi
   fi
 
   if [[ -n "${AUTHORIZED_KEYS_FILE}" && -f "${AUTHORIZED_KEYS_FILE}" ]]; then
     if [[ "$(count_valid_ssh_keys_in_file "${AUTHORIZED_KEYS_FILE}")" -eq 0 ]]; then
-      log warn "No valid public keys found in AUTHORIZED_KEYS_FILE: ${AUTHORIZED_KEYS_FILE}"
+      if [[ "${target_keys_ready}" == "yes" ]]; then
+        log info "AUTHORIZED_KEYS_FILE 当前没有有效公钥，但目标账户 authorized_keys 已安装完成。"
+      else
+        log info "AUTHORIZED_KEYS_FILE 当前没有有效公钥：${AUTHORIZED_KEYS_FILE}。第 4 步可直接粘贴 SSH 公钥并覆盖写入 ${preferred_source}。"
+      fi
     fi
   fi
 }
@@ -237,16 +243,19 @@ preflight_add_issue() {
 
 run_preflight_checks() {
   local -a errors=()
+  local -a pending=()
   local -a warnings=()
   local current_os=""
   local current_user=""
   local port_error=""
   local key_count=0
   local target_keys_ready="no"
+  local preferred_source=""
   local pkg=""
 
   printf 'Preflight 检查结果\n'
   printf '配置文件: %s\n\n' "${CONFIG_FILE:-未设置}"
+  preferred_source="$(preferred_authorized_keys_source_path)"
 
   current_os="$(pretty_os_name 2>/dev/null || echo unknown)"
   if is_debian12; then
@@ -282,34 +291,29 @@ run_preflight_checks() {
   fi
 
   if [[ -z "${AUTHORIZED_KEYS_FILE}" ]]; then
-    if [[ "${target_keys_ready}" == "yes" ]]; then
-      preflight_print_status "WARN" "AUTHORIZED_KEYS_FILE" "未设置；但目标账户 authorized_keys 已安装完成，后续 SSH 收紧不受此项阻塞"
-      preflight_add_issue warnings "AUTHORIZED_KEYS_FILE 未设置；当前仅缺少后续重新导入公钥的源文件"
-    else
-      preflight_print_status "ERROR" "AUTHORIZED_KEYS_FILE" "未设置"
-      preflight_add_issue errors "AUTHORIZED_KEYS_FILE 未设置"
-    fi
+    preflight_print_status "PENDING" "AUTHORIZED_KEYS_FILE" "当前未设置；第 4 步可直接粘贴 SSH 公钥并写入 ${preferred_source}"
+    preflight_add_issue pending "AUTHORIZED_KEYS_FILE 尚未准备好；首次执行第 4 步时可现场粘贴公钥"
   elif [[ ! -f "${AUTHORIZED_KEYS_FILE}" ]]; then
     if authorized_keys_source_is_root_only_path "${AUTHORIZED_KEYS_FILE}" && [[ "${EUID}" -ne 0 ]] && [[ "${target_keys_ready}" == "yes" ]]; then
-      preflight_print_status "WARN" "AUTHORIZED_KEYS_FILE" "当前指向 /root 下路径，非 root 用户不可访问；但目标账户 authorized_keys 已安装，可忽略此提示"
-      preflight_add_issue warnings "AUTHORIZED_KEYS_FILE 当前位于 /root 下；如需后续维护，建议迁移到 $(preferred_authorized_keys_source_path)"
+      preflight_print_status "PENDING" "AUTHORIZED_KEYS_FILE" "当前指向 /root 下路径，非 root 用户不可访问；但目标账户 authorized_keys 已安装，可忽略此提示"
+      preflight_add_issue pending "AUTHORIZED_KEYS_FILE 当前位于 /root 下；如需后续维护，建议迁移到 ${preferred_source}"
     elif [[ "${target_keys_ready}" == "yes" ]]; then
-      preflight_print_status "WARN" "AUTHORIZED_KEYS_FILE" "源文件当前不可访问或不存在；但目标账户 authorized_keys 已安装完成"
-      preflight_add_issue warnings "AUTHORIZED_KEYS_FILE 当前不可访问；如需后续维护，建议迁移到可读路径"
+      preflight_print_status "PENDING" "AUTHORIZED_KEYS_FILE" "源文件当前不可访问或不存在；但目标账户 authorized_keys 已安装完成"
+      preflight_add_issue pending "AUTHORIZED_KEYS_FILE 当前不可访问；如需后续维护，建议迁移到可读路径"
     else
-      preflight_print_status "ERROR" "AUTHORIZED_KEYS_FILE" "文件不存在: ${AUTHORIZED_KEYS_FILE}"
-      preflight_add_issue errors "AUTHORIZED_KEYS_FILE 不存在: ${AUTHORIZED_KEYS_FILE}"
+      preflight_print_status "PENDING" "AUTHORIZED_KEYS_FILE" "文件不存在：${AUTHORIZED_KEYS_FILE}；首次执行第 4 步时可直接粘贴 SSH 公钥"
+      preflight_add_issue pending "AUTHORIZED_KEYS_FILE 不存在；首次执行第 4 步时可现场粘贴公钥"
     fi
   else
     key_count="$(count_valid_ssh_keys_in_file "${AUTHORIZED_KEYS_FILE}")"
     if (( key_count > 0 )); then
       preflight_print_status "OK" "AUTHORIZED_KEYS_FILE" "检测到 ${key_count} 个有效公钥: ${AUTHORIZED_KEYS_FILE}"
     elif [[ "${target_keys_ready}" == "yes" ]]; then
-      preflight_print_status "WARN" "AUTHORIZED_KEYS_FILE" "源文件中未检测到有效公钥；但目标账户 authorized_keys 已安装完成"
-      preflight_add_issue warnings "AUTHORIZED_KEYS_FILE 中没有有效公钥；当前不会阻塞后续 SSH 收紧"
+      preflight_print_status "PENDING" "AUTHORIZED_KEYS_FILE" "源文件中未检测到有效公钥；但目标账户 authorized_keys 已安装完成"
+      preflight_add_issue pending "AUTHORIZED_KEYS_FILE 中没有有效公钥；当前不会阻塞后续 SSH 收紧"
     else
-      preflight_print_status "ERROR" "AUTHORIZED_KEYS_FILE" "未检测到有效公钥: ${AUTHORIZED_KEYS_FILE}"
-      preflight_add_issue errors "AUTHORIZED_KEYS_FILE 中没有有效公钥"
+      preflight_print_status "PENDING" "AUTHORIZED_KEYS_FILE" "未检测到有效公钥：${AUTHORIZED_KEYS_FILE}；第 4 步可重新粘贴 SSH 公钥"
+      preflight_add_issue pending "AUTHORIZED_KEYS_FILE 中没有有效公钥；首次执行第 4 步时可重新粘贴公钥"
     fi
   fi
 
@@ -360,6 +364,16 @@ run_preflight_checks() {
     done
   else
     preflight_print_status "OK" "提示项" "无额外提示"
+  fi
+
+  if ((${#pending[@]} > 0)); then
+    preflight_print_status "PENDING" "待完成项" "共 ${#pending[@]} 项"
+    local item=""
+    for item in "${pending[@]}"; do
+      printf -- '- %s\n' "${item}"
+    done
+  else
+    preflight_print_status "OK" "待完成项" "无首次配置待完成项"
   fi
 
   ((${#errors[@]} == 0))
