@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Module: 05_ssh_hardening
-# Purpose: 使用受控主配置块做 SSH 接入准备，并按 safe gate 决定是否关闭密码登录。
+# Purpose: 使用受控主配置块做 SSH 公钥接入准备，并按 safe gate 决定是否关闭密码登录。
 # Preconditions: root；Debian 12；openssh-server 可用。
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -145,7 +145,6 @@ main() {
   log info "Stage 5 readiness for ${ADMIN_USER:-<unset>}: ${step5_ready_state}"
   log info "Last successful SSH auth for ${ADMIN_USER:-<unset>}: ${last_auth_label}"
   log info "Publickey-only test: $(ssh_force_publickey_test_command "${ADMIN_USER:-<ADMIN_USER>}" "${applied_port}")"
-  log info "Password-only test: $(ssh_force_password_test_command "${ADMIN_USER:-<ADMIN_USER>}" "${applied_port}")"
 
   if [[ "${runtime_port}" != "${applied_port}" ]]; then
     die "SSH 实际端口与本阶段目标不一致：expected port=${applied_port}, actual port=${runtime_port}. Source: ${port_source:-not found}"

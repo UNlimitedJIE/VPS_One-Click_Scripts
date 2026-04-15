@@ -146,10 +146,13 @@ stage_intro_body() {
 这里还不是设置具体参数，只是确认是否开始。
 
 接下来会依次进入：
-1. 4.1 管理用户名
-2. 4.2 管理用户账户密码状态
-3. 4.3 sudo 是否需要密码
-4. 4.4 SSH 公钥安装
+1. 4.1 确认管理用户名
+2. 4.2 配置 sudo 行为
+3. 4.3 配置并验证 SSH 公钥
+4. SSH 接入准备
+
+这里不再单独配置账户密码。
+如果选择 sudo=password，后续会直接设置该管理用户用于 sudo 验证的本地密码。
 EOF
 }
 
@@ -157,9 +160,11 @@ stage_before_hardening_body() {
   local requested_port=""
   local effective_port=""
   local port_note=""
+  local auth_ready=""
 
   requested_port="${SSH_PORT:-22}"
   effective_port="$(effective_ssh_port_for_changes)"
+  auth_ready="$(ssh_publickey_login_ready_label_for_user "${ADMIN_USER}")"
 
   if [[ "${requested_port}" == "${effective_port}" ]]; then
     port_note="当前 SSH 端口：${effective_port}"
@@ -170,64 +175,84 @@ stage_before_hardening_body() {
   cat <<EOF
 即将执行第 4 步里的 SSH 接入准备。
 管理用户：${ADMIN_USER:-<未设置>}
-AUTHORIZED_KEYS_FILE：${AUTHORIZED_KEYS_FILE:-<未设置>}
+当前 authorized_keys：${auth_ready}
+SSH 公钥源：${AUTHORIZED_KEYS_FILE:-<未设置>}
 ${port_note}
-这一阶段不会关闭 root 远程登录；root 收口仍在第 5 步。
+这一阶段会按 safe gate 收敛 SSH 策略；root 收口仍在第 5 步。
 EOF
 }
 
+stage_detect_admin_sudo_mode() {
+  local dropin_path=""
+  local user_in_sudo_group="no"
+  local sudo_group_enabled="no"
+  local state_mode=""
+
+  state_mode="$(get_state "ADMIN_SUDO_MODE" || true)"
+  case "${state_mode}" in
+    nopasswd|password|no-sudo)
+      printf '%s\n' "${state_mode}"
+      return 0
+      ;;
+  esac
+
+  if [[ -z "${ADMIN_USER:-}" ]] || ! id -u "${ADMIN_USER}" >/dev/null 2>&1; then
+    printf '%s\n' "unknown"
+    return 0
+  fi
+
+  dropin_path="/etc/sudoers.d/90-${ADMIN_USER}"
+  if [[ -f "${dropin_path}" && "$(grep -Fxc "${ADMIN_USER} ALL=(ALL:ALL) NOPASSWD: ALL" "${dropin_path}" 2>/dev/null || true)" -gt 0 ]]; then
+    printf '%s\n' "nopasswd"
+    return 0
+  fi
+
+  if [[ -f "${dropin_path}" && "$(grep -Fxc "${ADMIN_USER} ALL=(ALL:ALL) ALL" "${dropin_path}" 2>/dev/null || true)" -gt 0 ]]; then
+    printf '%s\n' "password"
+    return 0
+  fi
+
+  if id -nG "${ADMIN_USER}" 2>/dev/null | tr ' ' '\n' | grep -Fxq "sudo"; then
+    user_in_sudo_group="yes"
+  fi
+  if grep -RqsE '^[[:space:]]*%sudo[[:space:]]+ALL=\(ALL(:ALL)?\)[[:space:]]+ALL' /etc/sudoers /etc/sudoers.d 2>/dev/null; then
+    sudo_group_enabled="yes"
+  fi
+
+  if [[ "${user_in_sudo_group}" == "yes" && "${sudo_group_enabled}" == "yes" ]]; then
+    printf '%s\n' "password"
+    return 0
+  fi
+
+  printf '%s\n' "no-sudo"
+}
+
 stage_connection_summary() {
-  local effective_port=""
   local auth_ready="not ready"
   local safe_gate_state=""
-  local admin_ready="no"
+  local sudo_mode=""
   local password_policy=""
   local pubkey_policy=""
-  local kbd_policy=""
-  local root_policy=""
-  local password_policy_state=""
-  local pubkey_policy_state=""
-  local root_policy_state=""
-  local target_password_policy=""
-  local target_pubkey_policy=""
-  local target_kbd_policy=""
   local step5_ready="no"
-  local last_auth_method=""
-  local last_auth_label=""
-  effective_port="$(effective_ssh_port_for_changes)"
+
   safe_gate_state="$(get_state "SSH_SAFE_GATE_PASSED" || true)"
   password_policy="$(current_password_authentication_mode || true)"
   pubkey_policy="$(current_pubkey_authentication_mode || true)"
-  kbd_policy="$(current_kbdinteractive_authentication_mode || true)"
-  root_policy="$(current_permit_root_login_mode || true)"
-  password_policy_state="$(ssh_policy_enabled_disabled_label "${password_policy}")"
-  pubkey_policy_state="$(ssh_policy_enabled_disabled_label "${pubkey_policy}")"
-  root_policy_state="$(ssh_root_remote_login_enabled_disabled_label "${root_policy}")"
-  target_password_policy="$(get_state "SSH_AUTH_TARGET_PASSWORD" || true)"
-  target_pubkey_policy="$(get_state "SSH_AUTH_TARGET_PUBKEY" || true)"
-  target_kbd_policy="$(get_state "SSH_AUTH_TARGET_KBD" || true)"
-  last_auth_method="$(last_successful_ssh_auth_method_for_user "${ADMIN_USER}")"
-  last_auth_label="$(ssh_last_successful_auth_method_label "${last_auth_method}")"
-
-  if [[ -n "${ADMIN_USER:-}" ]] && id -u "${ADMIN_USER}" >/dev/null 2>&1; then
-    admin_ready="yes"
-  fi
+  sudo_mode="$(stage_detect_admin_sudo_mode)"
 
   auth_ready="$(ssh_publickey_login_ready_label_for_user "${ADMIN_USER}")"
   step5_ready="$(ssh_stage5_ready_state_for_user "${ADMIN_USER}")"
-  safe_gate_state="${safe_gate_state:-no}"
+  safe_gate_state="${safe_gate_state:-$(ssh_safe_gate_state_for_user "${ADMIN_USER}")}"
 
   cat <<EOF
 第 4 步当前状态
 - 当前管理用户：${ADMIN_USER:-<未设置>}
-- 当前 SSH 端口：${effective_port}
+- 当前 sudo 模式：${sudo_mode}
+- 当前 authorized_keys：${auth_ready}
 - 当前 pubkeyauthentication：${pubkey_policy:-unknown}
 - 当前 passwordauthentication：${password_policy:-unknown}
-- 当前 root 远程登录：${root_policy_state}
-- 当前 permitrootlogin：${root_policy:-unknown}
-- 当前 authorized_keys：${auth_ready}
 - 当前 safe gate：${safe_gate_state}
-- 当前是否可进入第 5 步：${step5_ready}
+- 当前是否满足进入第 5 步的条件：${step5_ready}
 EOF
 }
 
@@ -248,6 +273,9 @@ main() {
 
   bash "${SCRIPT_DIR}/03_admin_user.sh"
   bash "${SCRIPT_DIR}/04_ssh_keys.sh"
+  if ! admin_authorized_keys_ready_for_user "${ADMIN_USER}"; then
+    die "第 4.3 段未完成：目标账户 authorized_keys 仍未 ready。"
+  fi
 
   confirm_stage_checkpoint "执行 SSH 加固前确认" "$(stage_before_hardening_body)" || die "SSH 加固已取消。"
 

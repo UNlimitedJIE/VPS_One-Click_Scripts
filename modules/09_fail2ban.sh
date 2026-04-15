@@ -19,6 +19,7 @@ source "${SCRIPT_DIR}/../lib/common.sh"
 _FAIL2BAN_SELECTED_BACKEND="${_FAIL2BAN_SELECTED_BACKEND:-}"
 _FAIL2BAN_SELECTED_JOURNALMATCH="${_FAIL2BAN_SELECTED_JOURNALMATCH:-}"
 _FAIL2BAN_SELECTED_LOGPATH="${_FAIL2BAN_SELECTED_LOGPATH:-}"
+_FAIL2BAN_SYSTEMD_BACKEND_LAST_ERROR="${_FAIL2BAN_SYSTEMD_BACKEND_LAST_ERROR:-}"
 
 fail2ban_jail_maxretry() {
   printf '%s\n' "5"
@@ -108,14 +109,17 @@ fail2ban_report_dependency_failure() {
 }
 
 fail2ban_ensure_systemd_backend_available() {
+  _FAIL2BAN_SYSTEMD_BACKEND_LAST_ERROR=""
+
   if fail2ban_python_systemd_module_available; then
     return 0
   fi
 
   log info "python3-systemd 不可用，尝试安装以启用 fail2ban systemd backend"
   if ! apt_install_packages python3-systemd; then
-    log warn "python3-systemd 安装失败，Fail2Ban 模块终止"
-    fail2ban_report_dependency_failure "python3-systemd 安装失败，无法启用 fail2ban systemd backend"
+    _FAIL2BAN_SYSTEMD_BACKEND_LAST_ERROR="python3-systemd 安装失败，无法启用 fail2ban systemd backend"
+    log warn "python3-systemd 安装失败，无法启用 fail2ban systemd backend"
+    return 1
   fi
 
   log info "python3-systemd 安装成功，重新检测 systemd backend 可用性"
@@ -124,8 +128,9 @@ fail2ban_ensure_systemd_backend_available() {
     return 0
   fi
 
-  log warn "python3-systemd 安装后再次检测仍不可用，Fail2Ban 模块终止"
-  fail2ban_report_dependency_failure "python3-systemd 安装后再次检测仍不可用，无法继续配置 fail2ban systemd backend"
+  _FAIL2BAN_SYSTEMD_BACKEND_LAST_ERROR="python3-systemd 安装后再次检测仍不可用，无法继续配置 fail2ban systemd backend"
+  log warn "python3-systemd 安装后再次检测仍不可用，无法继续使用 fail2ban systemd backend"
+  return 1
 }
 
 fail2ban_nftables_in_use() {
@@ -180,6 +185,7 @@ fail2ban_detect_banaction() {
 
 fail2ban_select_backend() {
   local journalmatch=""
+  local logpath=""
 
   _FAIL2BAN_SELECTED_BACKEND=""
   _FAIL2BAN_SELECTED_JOURNALMATCH=""
@@ -199,9 +205,22 @@ fail2ban_select_backend() {
     return 0
   fi
 
-  fail2ban_ensure_systemd_backend_available
-  _FAIL2BAN_SELECTED_BACKEND="systemd"
-  _FAIL2BAN_SELECTED_JOURNALMATCH="${journalmatch}"
+  if fail2ban_ensure_systemd_backend_available; then
+    _FAIL2BAN_SELECTED_BACKEND="systemd"
+    _FAIL2BAN_SELECTED_JOURNALMATCH="${journalmatch}"
+    return 0
+  fi
+
+  log warn "${_FAIL2BAN_SYSTEMD_BACKEND_LAST_ERROR:-fail2ban systemd backend 不可用}，尝试回退到 SSH 日志文件 backend"
+  logpath="$(fail2ban_auth_log_path || true)"
+  if [[ -n "${logpath}" ]]; then
+    log info "已回退到 SSH 日志文件 backend，继续执行 Fail2Ban 后续配置"
+    _FAIL2BAN_SELECTED_BACKEND="auto"
+    _FAIL2BAN_SELECTED_LOGPATH="${logpath}"
+    return 0
+  fi
+
+  fail2ban_report_dependency_failure "${_FAIL2BAN_SYSTEMD_BACKEND_LAST_ERROR:-python3-systemd 不可用}，且当前未找到可回退的 SSH 日志文件"
 }
 
 fail2ban_render_sshd_local() {
@@ -214,8 +233,7 @@ fail2ban_render_sshd_local() {
   local findtime="$7"
   local bantime="$8"
 
-  {
-    cat <<EOF
+  cat <<EOF
 [sshd]
 enabled = true
 backend = ${backend}
@@ -225,9 +243,14 @@ maxretry = ${maxretry}
 findtime = ${findtime}
 bantime = ${bantime}
 EOF
-    [[ -n "${journalmatch}" ]] && printf 'journalmatch = %s\n' "${journalmatch}"
-    [[ -n "${logpath}" ]] && printf 'logpath = %s\n' "${logpath}"
-  }
+  if [[ -n "${journalmatch}" ]]; then
+    printf 'journalmatch = %s\n' "${journalmatch}"
+  fi
+  if [[ -n "${logpath}" ]]; then
+    printf 'logpath = %s\n' "${logpath}"
+  fi
+
+  return 0
 }
 
 fail2ban_single_line() {

@@ -29,7 +29,7 @@ fail_authorized_keys_install() {
   set_state "AUTHORIZED_KEYS_COUNT" "0"
   if is_false "${PLAN_ONLY:-false}" && is_false "${DRY_RUN:-false}" && ui_is_interactive; then
     ui_show_plain_and_wait \
-      "第 4.4 段 目标账户 authorized_keys 安装失败" \
+      "第 4.3 段 目标账户 authorized_keys 安装失败" \
       "${failure_message}" \
       "按回车退出当前步骤："
   fi
@@ -87,7 +87,7 @@ show_source_write_result_and_wait() {
   local key_count="$2"
 
   ui_show_plain_and_wait \
-    "第 4.4 段 公钥源文件写入结果" \
+    "第 4.3 段 公钥源文件写入结果" \
     "已接收公钥，已写入源文件。\n源文件：${source_file}\n有效公钥数量：${key_count}" \
     "按回车继续安装到目标账户："
 }
@@ -98,23 +98,9 @@ show_target_install_result_and_wait() {
   local key_count="$3"
 
   ui_show_plain_and_wait \
-    "第 4.4 段 目标账户 authorized_keys 安装结果" \
+    "第 4.3 段 目标账户 authorized_keys 安装结果" \
     "已安装到目标账户 authorized_keys。\n源文件：${source_file}\n目标文件：${auth_file}\n有效公钥数量：${key_count}" \
     "按回车继续："
-}
-
-confirm_existing_authorized_keys_source_install() {
-  local source_file="$1"
-  local auth_file="$2"
-
-  if is_true "${PLAN_ONLY:-false}" || is_true "${DRY_RUN:-false}"; then
-    log info "[plan] detected valid authorized_keys source: ${source_file}"
-    return 0
-  fi
-
-  ui_confirm_enter_or_zero \
-    "第 4.4 段 安装 SSH 公钥" \
-    "已检测到可用公钥源文件。\n当前目标用户：${ADMIN_USER}\n当前目标文件：${auth_file}\n当前源文件：${source_file}\n将把这个公钥安装到目标账户。"
 }
 
 capture_authorized_keys_source_via_paste() {
@@ -138,7 +124,7 @@ capture_authorized_keys_source_via_paste() {
 
   while true; do
     if ! ui_prompt_input \
-      "第 4.4 段 粘贴 SSH 公钥" \
+      "第 4.3 段 粘贴 SSH 公钥" \
       "$(authorized_keys_source_status_message "${source_file}")
 当前目标用户：${ADMIN_USER}
 当前目标文件：${auth_file}
@@ -275,35 +261,25 @@ main() {
   ssh_dir="${home_dir}/.ssh"
   auth_file="${ssh_dir}/authorized_keys"
 
-  log info "Stage 4.4 authorized_keys target file: ${auth_file}"
+  log info "Stage 4.3 authorized_keys target file: ${auth_file}"
 
   if resolve_authorized_keys_source; then
     source_file="${_AUTHORIZED_KEYS_RESOLVED_SOURCE_FILE}"
   fi
 
-  if [[ -n "${source_file}" ]]; then
-    confirm_existing_authorized_keys_source_install "${source_file}" "${auth_file}" || return 0
-  fi
-
   if [[ -z "${source_file}" ]]; then
     if capture_authorized_keys_source_via_paste "${auth_file}"; then
       source_file="${_AUTHORIZED_KEYS_CAPTURED_SOURCE_FILE}"
+    elif is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
+      log info "Plan/Dry-run note: fixed authorized_keys source is not ready; real execution will require pasting a valid SSH public key."
+      return 0
+    else
+      fail_authorized_keys_install "未提供有效 SSH 公钥，无法完成第 4.3 段。请先准备 ${source_file:-$(preferred_authorized_keys_source_path)}，或现场粘贴一整行公钥。"
     fi
   fi
 
   if [[ -z "${source_file}" ]]; then
-    if admin_authorized_keys_install_valid_for_user "${ADMIN_USER}"; then
-      key_count="$(admin_authorized_keys_count_for_user "${ADMIN_USER}")"
-      set_state "AUTHORIZED_KEYS_PRESENT" "yes"
-      set_state "AUTHORIZED_KEYS_COUNT" "${key_count}"
-      log info "No valid source file is currently available, but target authorized_keys is already ready for ${ADMIN_USER}."
-      return 0
-    fi
-
-    log info "No valid authorized_keys source is currently available. Target authorized_keys is still not ready."
-    set_state "AUTHORIZED_KEYS_PRESENT" "no"
-    set_state "AUTHORIZED_KEYS_COUNT" "0"
-    return 0
+    fail_authorized_keys_install "未解析到可用的 SSH 公钥源，无法继续第 4.3 段。"
   fi
 
   AUTHORIZED_KEYS_FILE="${source_file}"
@@ -311,6 +287,9 @@ main() {
   log info "Authorized keys source file: ${source_file}"
 
   install_authorized_keys_to_target "${source_file}" "${ssh_dir}" "${auth_file}"
+  if ! admin_authorized_keys_install_valid_for_user "${ADMIN_USER}"; then
+    fail_authorized_keys_install "目标账户 authorized_keys 仍未 ready：${auth_file}"
+  fi
 
   if ui_is_interactive && is_false "${PLAN_ONLY}" && is_false "${DRY_RUN}"; then
     key_count="$(admin_authorized_keys_count_for_user "${ADMIN_USER}")"
