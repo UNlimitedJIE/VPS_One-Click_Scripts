@@ -93,6 +93,41 @@ import systemd
 PY
 }
 
+fail2ban_report_dependency_failure() {
+  local evidence="${1:-python3-systemd 不可用}"
+  local report=""
+
+  report="$(readonly_status_block \
+    "Fail2Ban" \
+    "service=failed; sshd_jail_loaded=no; backend=systemd" \
+    "${evidence}" \
+    "no")"
+  log info "${report}"
+
+  die "${evidence}"
+}
+
+fail2ban_ensure_systemd_backend_available() {
+  if fail2ban_python_systemd_module_available; then
+    return 0
+  fi
+
+  log info "python3-systemd 不可用，尝试安装以启用 fail2ban systemd backend"
+  if ! apt_install_packages python3-systemd; then
+    log warn "python3-systemd 安装失败，Fail2Ban 模块终止"
+    fail2ban_report_dependency_failure "python3-systemd 安装失败，无法启用 fail2ban systemd backend"
+  fi
+
+  log info "python3-systemd 安装成功，重新检测 systemd backend 可用性"
+  if fail2ban_python_systemd_module_available; then
+    log info "systemd backend 依赖已满足，继续执行 Fail2Ban 后续配置"
+    return 0
+  fi
+
+  log warn "python3-systemd 安装后再次检测仍不可用，Fail2Ban 模块终止"
+  fail2ban_report_dependency_failure "python3-systemd 安装后再次检测仍不可用，无法继续配置 fail2ban systemd backend"
+}
+
 fail2ban_nftables_in_use() {
   package_installed nftables || return 1
   [[ -f "$(nftables_config_path)" ]] || return 1
@@ -145,7 +180,6 @@ fail2ban_detect_banaction() {
 
 fail2ban_select_backend() {
   local journalmatch=""
-  local logpath=""
 
   _FAIL2BAN_SELECTED_BACKEND=""
   _FAIL2BAN_SELECTED_JOURNALMATCH=""
@@ -165,19 +199,9 @@ fail2ban_select_backend() {
     return 0
   fi
 
-  log info "python3-systemd 不可用，尝试安装以启用 fail2ban systemd backend"
-  if apt_install_packages python3-systemd && fail2ban_python_systemd_module_available; then
-    _FAIL2BAN_SELECTED_BACKEND="systemd"
-    _FAIL2BAN_SELECTED_JOURNALMATCH="${journalmatch}"
-    return 0
-  fi
-
-  log warn "python3-systemd 仍不可用，回退到 SSH 日志文件 backend"
-  logpath="$(fail2ban_auth_log_path || true)"
-  [[ -n "${logpath}" ]] || die "无法使用 systemd backend，且当前未找到可回退的 SSH 日志文件。"
-
-  _FAIL2BAN_SELECTED_BACKEND="auto"
-  _FAIL2BAN_SELECTED_LOGPATH="${logpath}"
+  fail2ban_ensure_systemd_backend_available
+  _FAIL2BAN_SELECTED_BACKEND="systemd"
+  _FAIL2BAN_SELECTED_JOURNALMATCH="${journalmatch}"
 }
 
 fail2ban_render_sshd_local() {
@@ -510,6 +534,7 @@ main() {
     fail2ban_run_checked_command "Checking fail2ban config" "fail2ban-client -t failed" fail2ban-client -t
     fail2ban_run_checked_command "Restarting fail2ban service" "systemctl restart fail2ban failed" systemctl restart fail2ban
     fail2ban_wait_for_ready 15
+    fail2ban_run_checked_command "Checking fail2ban ping" "fail2ban-client ping failed" fail2ban-client ping
     fail2ban_run_checked_command "Checking fail2ban global status" "fail2ban-client status failed" fail2ban-client status
     fail2ban_run_checked_command "Checking fail2ban sshd jail status" "fail2ban-client status sshd failed" fail2ban-client status sshd
     fail2ban_log_summary "${backend}" "${journalmatch}" "${logpath}" "${banaction}" "${port}" "${maxretry}" "${findtime}" "${bantime}"

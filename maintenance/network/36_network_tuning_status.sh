@@ -74,7 +74,8 @@ main() {
   local realm_service=""
   local realm_config=""
   local realm_format=""
-  local realm_state="not detected"
+  local realm_state="未检测到 Realm"
+  local realm_evidence="未发现 realm 服务与配置"
   local realm_values="n/a"
   local realm_pass="未适用"
 
@@ -121,6 +122,7 @@ main() {
   realm_format="$(network_tuning_realm_config_format "${realm_config}")"
   if [[ -n "${realm_service}" || -n "${realm_config}" ]]; then
     realm_state="service=${realm_service:-unknown}, config=${realm_config:-unknown}"
+    realm_evidence="systemctl status ${realm_service:-realm}; ${realm_config:-no-config}"
     realm_pass="no"
     if [[ -n "${realm_config}" && -f "${realm_config}" ]]; then
       realm_values="$(realm_status_values "${realm_config}" "${realm_format}")"
@@ -128,6 +130,7 @@ main() {
     if [[ -n "${realm_service}" && "$(network_tuning_service_state "${realm_service}")" == "active" ]] && printf '%s\n' "${realm_values}" | grep -q 'tcp_timeout=30'; then
       realm_pass="yes"
     fi
+    realm_evidence="${realm_evidence}; values=${realm_values}"
   fi
 
   if [[ "$(network_tuning_ipv6_disable_all)" == "1" || "$(network_tuning_ipv6_disable_default)" == "1" ]]; then
@@ -158,8 +161,8 @@ main() {
 
   print_status_section \
     "Realm timeout 修复状态" \
-    "${realm_state}; service_state=$( [[ -n "${realm_service}" ]] && network_tuning_service_state "${realm_service}" || echo not-found ); values=${realm_values}" \
-    "systemctl status ${realm_service:-realm}; ${realm_config:-no-config}" \
+    "${realm_state}" \
+    "${realm_evidence}" \
     "${realm_pass}"
 
   print_status_section \
