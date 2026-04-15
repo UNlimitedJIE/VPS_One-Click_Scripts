@@ -100,8 +100,6 @@ sudo bash bootstrap.sh init
 3. `4.3` 配置并验证 SSH 公钥
 4. SSH 接入准备
 
-这里不再单独配置“账户密码”这条独立概念。若选择 `sudo=password`，脚本会直接为该管理用户设置用于 sudo 验证的本地密码。
-
 ## 推荐使用顺序
 
 建议顺序：
