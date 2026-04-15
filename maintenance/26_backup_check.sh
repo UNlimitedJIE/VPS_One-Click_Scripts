@@ -21,8 +21,9 @@ main() {
   module_banner "26_backup_check" "备份与恢复检查"
   require_root
 
-  local found_tools timers backups report
+  local found_tools timers backups report passed
   found_tools=""
+  passed="no"
   for tool in restic borg rclone rsnapshot duplicity; do
     if command_exists "${tool}"; then
       found_tools+="${tool} "
@@ -31,23 +32,13 @@ main() {
 
   timers="$(systemctl list-timers --all --no-pager 2>/dev/null | grep -Ei 'backup|restic|borg|rsnapshot' || true)"
   backups="$(find /var/backups -maxdepth 2 -type f -mtime -7 2>/dev/null | head -n 20 || true)"
+  [[ -n "${timers}" || -n "${backups}" ]] && passed="yes"
 
-  report="$(cat <<EOF
-Audit time: $(date -Iseconds)
-Detected backup tools: ${found_tools:-none}
-
-Relevant timers:
-${timers:-none}
-
-Recent files under /var/backups (7 days):
-${backups:-none}
-
-Manual reminders:
-- Verify at least one recent backup exists outside this VPS.
-- Verify restore procedure on a separate test host.
-- Keep provider snapshot policy separate from in-guest file backup policy.
-EOF
-)"
+  report="$(readonly_status_block \
+    "备份与恢复检查" \
+    "tools=${found_tools:-none}; timers=$( [[ -n "${timers}" ]] && echo yes || echo no ); recent_backups=$( [[ -n "${backups}" ]] && echo yes || echo no )" \
+    "command -v restic/borg/rclone/rsnapshot/duplicity; systemctl list-timers; find /var/backups -mtime -7" \
+    "${passed}")"
 
   log info "${report}"
 

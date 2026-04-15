@@ -220,6 +220,19 @@ fail2ban_failure_reason() {
     return 0
   fi
 
+  if [[ "${context}" == "startup-timeout" ]] || \
+     [[ "${text}" =~ fail2ban\.sock ]] || \
+     [[ "${text}" =~ Failed[[:space:]]to[[:space:]]access[[:space:]]socket[[:space:]]path ]] || \
+     [[ "${text}" =~ Connection[[:space:]]refused ]] || \
+     [[ "${text}" =~ No[[:space:]]such[[:space:]]file[[:space:]]or[[:space:]]directory ]] || \
+     [[ "${text}" =~ Could[[:space:]]not[[:space:]]find[[:space:]]server ]] || \
+     [[ "${text}" =~ Is[[:space:]]the[[:space:]]server[[:space:]]running ]] || \
+     [[ "${text}" =~ activating ]] || \
+     [[ "${text}" =~ startup ]]; then
+    printf '%s\n' "startup timeout / service not ready"
+    return 0
+  fi
+
   if [[ "${text}" =~ Have[[:space:]]not[[:space:]]found[[:space:]]any[[:space:]]log[[:space:]]file[[:space:]]for[[:space:]]sshd[[:space:]]jail ]] || \
      [[ "${text}" =~ Invalid[[:space:]]journalmatch ]] || \
      [[ "${text}" =~ Failed[[:space:]]to[[:space:]]access[[:space:]]journal ]] || \
@@ -237,15 +250,8 @@ fail2ban_failure_reason() {
     return 0
   fi
 
-  if [[ "${context}" == "startup-timeout" ]] || \
-     [[ "${text}" =~ Server[[:space:]]ready ]] || \
-     [[ "${text}" =~ Failed[[:space:]]to[[:space:]]start[[:space:]]Fail2Ban[[:space:]]Service ]] || \
-     [[ "${text}" =~ Connection[[:space:]]refused ]] || \
-     [[ "${text}" =~ No[[:space:]]such[[:space:]]file[[:space:]]or[[:space:]]directory ]] || \
-     [[ "${text}" =~ Could[[:space:]]not[[:space:]]find[[:space:]]server ]] || \
-     [[ "${text}" =~ Is[[:space:]]the[[:space:]]server[[:space:]]running ]] || \
-     [[ "${text}" =~ activating ]] || \
-     [[ "${text}" =~ startup ]]; then
+  if [[ "${text}" =~ Server[[:space:]]ready ]] || \
+     [[ "${text}" =~ Failed[[:space:]]to[[:space:]]start[[:space:]]Fail2Ban[[:space:]]Service ]]; then
     printf '%s\n' "startup timeout / service not ready"
     return 0
   fi
@@ -279,7 +285,7 @@ fail2ban_extract_key_lines() {
   local text="${1:-}"
 
   printf '%s\n' "${text}" | awk '
-    /Failed during configuration|Have not found any log file|No file\(s\) found for glob|Invalid journalmatch|Failed to access journal|Unknown backend|Unable to find a corresponding action|Failed to execute.*(iptables|nftables)|Failed to start|Main process exited|Connection refused|No such file or directory|Is the server running|ERROR|status=/ {
+    /Failed during configuration|Have not found any log file|No file\(s\) found for glob|Invalid journalmatch|Failed to access journal|Unknown backend|Unable to find a corresponding action|Failed to execute.*(iptables|nftables)|Failed to start|Main process exited|Connection refused|No such file or directory|fail2ban\.sock|Failed to access socket path|Is the server running|ERROR|status=/ {
       gsub(/^[[:space:]]+/, "", $0)
       if (!seen[$0]++) {
         print
@@ -429,7 +435,7 @@ main() {
   run_cmd "Enabling service fail2ban" systemctl enable fail2ban
 
   if command_exists fail2ban-client && is_false "${PLAN_ONLY}" && is_false "${DRY_RUN}"; then
-    fail2ban_run_checked_command "Checking fail2ban config" "fail2ban-client -d failed" fail2ban-client -d
+    fail2ban_run_checked_command "Checking fail2ban config" "fail2ban-client -t failed" fail2ban-client -t
     fail2ban_run_checked_command "Restarting fail2ban service" "systemctl restart fail2ban failed" systemctl restart fail2ban
     fail2ban_wait_for_ready 15
     fail2ban_run_checked_command "Checking fail2ban global status" "fail2ban-client status failed" fail2ban-client status

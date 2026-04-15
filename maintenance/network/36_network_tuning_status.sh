@@ -76,7 +76,7 @@ main() {
   local realm_format=""
   local realm_state="not detected"
   local realm_values="n/a"
-  local realm_pass="no"
+  local realm_pass="未适用"
 
   local ipv6_enabled="yes"
   local ipv6_state=""
@@ -121,6 +121,7 @@ main() {
   realm_format="$(network_tuning_realm_config_format "${realm_config}")"
   if [[ -n "${realm_service}" || -n "${realm_config}" ]]; then
     realm_state="service=${realm_service:-unknown}, config=${realm_config:-unknown}"
+    realm_pass="no"
     if [[ -n "${realm_config}" && -f "${realm_config}" ]]; then
       realm_values="$(realm_status_values "${realm_config}" "${realm_format}")"
     fi

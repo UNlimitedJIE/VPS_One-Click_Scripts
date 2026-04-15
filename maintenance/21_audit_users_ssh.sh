@@ -21,23 +21,42 @@ main() {
   module_banner "21_audit_users_ssh" "审查用户、sudo、SSH 密钥"
   require_root
 
-  local report_file
-  report_file="${STATE_DIR}/reports/users-ssh-$(date '+%Y%m%d-%H%M%S').txt"
-
+  local report_file=""
+  local sudo_list=""
+  local current=""
+  local evidence=""
+  local passed="no"
   local report=""
-  report+="Audit time: $(date -Iseconds)"$'\n'
-  report+="Hostname: $(hostnamectl --static 2>/dev/null || hostname)"$'\n'
-  report+="Sudo members: $(sudo_members)"$'\n'
-  report+=$'\n'
-  report+="Interactive users and authorized_keys counts:"$'\n'
+  local key_summary=""
+  local interactive_list=""
+  local user=""
+  local home_dir=""
+  local key_count=""
 
-  local user home_dir key_count
+  report_file="${STATE_DIR}/reports/users-ssh-$(date '+%Y%m%d-%H%M%S').txt"
+  sudo_list="$(sudo_members)"
+
   while IFS= read -r user; do
     [[ -n "${user}" ]] || continue
     home_dir="$(home_dir_for_user "${user}")"
     key_count="$(count_valid_ssh_keys_in_file "${home_dir}/.ssh/authorized_keys")"
-    report+="- ${user}: home=${home_dir}, keys=${key_count}"$'\n'
+    [[ -n "${interactive_list}" ]] && interactive_list+=", "
+    interactive_list+="${user}"
+    [[ -n "${key_summary}" ]] && key_summary+=", "
+    key_summary+="${user}:${key_count}"
   done < <(interactive_users)
+
+  [[ -n "${interactive_list}" ]] || interactive_list="none"
+  [[ -n "${key_summary}" ]] || key_summary="none"
+  [[ -n "${sudo_list}" ]] || sudo_list="none"
+
+  if [[ "${sudo_list}" != "none" ]]; then
+    passed="yes"
+  fi
+
+  current="interactive_users=${interactive_list}; sudo_members=${sudo_list}; authorized_keys=${key_summary}"
+  evidence="/etc/passwd; sudo group membership; ~/.ssh/authorized_keys"
+  report="$(readonly_status_block "用户 / sudo / SSH 密钥审查" "${current}" "${evidence}" "${passed}")"
 
   log info "${report}"
 

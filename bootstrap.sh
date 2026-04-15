@@ -231,6 +231,10 @@ run_module_from_registry_line() {
   local step_no module_id phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh
   IFS=$'\t' read -r step_no module_id phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh <<<"${line}"
 
+  if is_true "${MENU_EXECUTION_SCREEN_MODE:-false}" && is_false "${PLAN_ONLY:-false}" && is_false "${DRY_RUN:-false}"; then
+    ui_clear_screen || true
+  fi
+
   if is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
     print_plan_card "${line}"
   else
@@ -300,6 +304,8 @@ log_missing_dependency_notice() {
   local dependency="$2"
   local assessment=""
 
+  dependency_token_is_placeholder "${dependency}" && return 0
+
   assessment="$(dependency_assessment_status "${dependency}")"
   case "${assessment}" in
     completion_state_found)
@@ -324,12 +330,12 @@ warn_missing_dependencies() {
     local step_no module_id entry_phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh
     IFS=$'\t' read -r step_no module_id entry_phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh <<<"${line}"
     selection_contains "${module_id}" "${selected[@]}" || continue
-    [[ -n "${depends_on}" ]] || continue
+    dependency_token_is_placeholder "${depends_on}" && continue
 
     local dependency=""
     IFS=',' read -r -a dep_list <<<"${depends_on}"
     for dependency in "${dep_list[@]}"; do
-      [[ -n "${dependency}" ]] || continue
+      dependency_token_is_placeholder "${dependency}" && continue
       if ! selection_contains "${dependency}" "${selected[@]}"; then
         log_missing_dependency_notice "${module_id}" "${dependency}"
       fi
@@ -499,23 +505,19 @@ prompt_admin_user_persist_choice() {
   target_file="$(active_config_file_path)"
 
   while true; do
-    if ! ui_prompt_input "保存管理用户名" "是否将该用户名写入 ${target_file} 作为后续默认值？\n请输入 yes 或 no：" "no"; then
+    if ! ui_prompt_input "保存管理用户名" "是否将该用户名写入 ${target_file} 作为后续默认值？\n请输入 y/n（yes/no 也可）：" "no"; then
       return 0
     fi
 
     answer="$(ui_trim_value "${UI_LAST_INPUT}")"
-    case "${answer}" in
-      yes|YES|y|Y)
-        upsert_config_assignment "${target_file}" "ADMIN_USER" "${username}"
-        return 0
-        ;;
-      no|NO|n|N|""|0)
-        return 0
-        ;;
-      *)
-        ui_warn_message "输入无效" "请输入 yes 或 no；直接回车默认 no。"
-        ;;
-    esac
+    if ui_input_is_affirmative "${answer}"; then
+      upsert_config_assignment "${target_file}" "ADMIN_USER" "${username}"
+      return 0
+    fi
+    if ui_input_is_negative "${answer}" || [[ -z "${answer}" || "${answer}" == "0" ]]; then
+      return 0
+    fi
+    ui_warn_message "输入无效" "请输入 y/n（yes/no 也可）；直接回车默认 no。"
   done
 }
 
@@ -612,34 +614,51 @@ menu_action_summary() {
 menu_show_action_result() {
   local result="$1"
   local summary="$2"
-  local body=""
+  local current=""
+  local evidence=""
+  local passed=""
+  local title=""
 
   case "${result}" in
     success)
-      body="已完成：${summary}"
+      title="结果页"
+      current="已完成：${summary}"
+      evidence="本次执行已完成；完整日志：${LOG_FILE:-<unset>}"
+      passed="yes"
       ;;
     failure)
-      body=$'执行失败：'"${summary}"$'\n请查看上方输出或日志，然后返回菜单继续操作。'
+      title="错误页"
+      current="执行失败：${summary}"
+      evidence="请查看上方报错输出；完整日志：${LOG_FILE:-<unset>}"
+      passed="no"
       ;;
     *)
-      body=$'执行未完成：'"${summary}"$'\n请查看上方输出或日志，然后返回菜单继续操作。'
+      title="结果页"
+      current="执行未完成：${summary}"
+      evidence="请查看上方执行输出；完整日志：${LOG_FILE:-<unset>}"
+      passed="no"
       ;;
   esac
 
-  ui_print_raw $'\n'"${body}"$'\n'
-  ui_wait_for_enter "按回车返回菜单：" || true
+  ui_show_status_page_and_wait "${title}" "${current}" "${evidence}" "${passed}" "按回车返回菜单：" || true
+  ui_clear_screen || true
 }
 
 menu_execute_with_feedback() {
   local summary="$1"
   shift || true
   local status=0
+  local command_name="${1:-}"
 
   ensure_runtime_initialized
 
   set +e
   (
     set -e
+    export MENU_EXECUTION_SCREEN_MODE="true"
+    if [[ "${command_name}" != "run_phase_from_registry" && "${command_name}" != "run_network_modules" ]]; then
+      ui_clear_screen || true
+    fi
     "$@"
   )
   status=$?
@@ -848,7 +867,7 @@ install_shortcut() {
     elif ! ui_require_interactive; then
       rm -f "${temp_file}"
       die "${target} already exists. Rerun in an interactive terminal to confirm overwrite, or remove it manually."
-    elif ! ui_confirm_text "覆盖 j 命令" "${target} 已存在。\n\n输入 yes 覆盖；输入其他内容跳过安装。"; then
+    elif ! ui_confirm_text "覆盖 j 命令" "${target} 已存在。\n\n输入 y 覆盖（yes 也可）；输入其他内容跳过安装。"; then
       log info "Skipped installing shortcut: ${target}"
       rm -f "${temp_file}"
       return 0
@@ -961,9 +980,9 @@ confirm_terminal_yes() {
   local answer=""
 
   printf '\n%s\n\n%s\n' "${title}" "${body}"
-  printf '继续执行请输入 yes：'
+  printf '输入 y 继续（yes 也可）：'
   read -r answer || return 1
-  [[ "${answer}" == "yes" ]]
+  ui_input_is_affirmative "${answer}"
 }
 
 build_maintain_main_sequence() {
@@ -1030,7 +1049,7 @@ render_network_menu_prompt() {
 
   while IFS= read -r line; do
     IFS=$'\t' read -r step_no module_id entry_phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh <<<"${line}"
-    header+="${step_no} ${title_zh}"
+    header+="${step_no}. ${title_zh}"
     if [[ "${risk_level}" == "high" ]]; then
       header+=" 【高风险】"
     fi
@@ -1040,22 +1059,24 @@ render_network_menu_prompt() {
 
   header+=$'0. 返回上一级菜单\n\n'
   header+=$'输入规则：\n'
-  header+=$'- 输入单个数字，例如 1，执行 3.1\n'
-  header+=$'- 也可以输入完整编号，例如 3.1\n'
-  header+=$'- 可输入多个编号，例如 1,7 或 3.1,3.7\n'
+  header+=$'- 输入单个数字直接执行对应项目\n'
+  header+=$'- 可输入多个编号，例如 1,7\n'
 
   printf '%s' "${header}"
 }
 
 prompt_init_execution_input() {
+  ui_clear_screen || true
   ui_prompt_input "初始化菜单" "$(render_init_menu_prompt)"
 }
 
 prompt_maintain_execution_input() {
+  ui_clear_screen || true
   ui_prompt_input "长期维护菜单" "$(render_maintain_menu_prompt)"
 }
 
 prompt_network_execution_input() {
+  ui_clear_screen || true
   ui_prompt_input "网络调优子菜单" "$(render_network_menu_prompt)"
 }
 
@@ -1109,6 +1130,7 @@ EOF
 }
 
 prompt_port_management_input() {
+  ui_clear_screen || true
   ui_prompt_input "端口管理子菜单" "$(render_port_management_prompt)"
 }
 
@@ -1286,6 +1308,9 @@ resolve_network_selection_token() {
   local normalized=""
   normalized="$(basename "${token}")"
   normalized="${normalized%.sh}"
+  if [[ "${normalized}" =~ ^3\.([0-9]+)$ ]]; then
+    normalized="${BASH_REMATCH[1]}"
+  fi
 
   local line=""
   local index=0
@@ -1300,11 +1325,6 @@ resolve_network_selection_token() {
     fi
 
     if [[ "${normalized}" == "${step_no}" || "${normalized}" == "${index}" ]]; then
-      printf '%s\n' "${module_id}"
-      return 0
-    fi
-
-    if [[ "${step_no}" == 3.* && "${normalized}" == "${step_no#3.}" ]]; then
       printf '%s\n' "${module_id}"
       return 0
     fi
@@ -1435,7 +1455,7 @@ menu_network_phase() {
     raw_input="$(ui_trim_value "${UI_LAST_INPUT}")"
 
     if [[ -z "${raw_input}" ]]; then
-      ui_warn_message "输入为空" "请输入网络调优编号，例如 1、3.1 或 3.7。"
+      ui_warn_message "输入为空" "请输入网络调优编号，例如 1 或 1,7。"
       continue
     fi
 
@@ -1446,14 +1466,14 @@ menu_network_phase() {
     local raw_tokens=()
     mapfile -t raw_tokens < <(split_menu_input_tokens "${raw_input}")
     ((${#raw_tokens[@]} > 0)) || {
-      ui_warn_message "输入无效" "请输入单个编号，或多个逗号分隔的编号。例如：1、3.1 或 1,7。"
+      ui_warn_message "输入无效" "请输入单个编号，或多个逗号分隔的编号。例如：1 或 1,7。"
       continue
     }
 
     local token=""
     for token in "${raw_tokens[@]}"; do
       if [[ ! "${token}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-        ui_warn_message "输入无效" "只支持输入数字编号，例如 1、3.1 或 1,7。"
+        ui_warn_message "输入无效" "只支持输入数字编号，例如 1 或 1,7。"
         continue 2
       fi
     done

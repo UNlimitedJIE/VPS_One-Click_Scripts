@@ -106,23 +106,19 @@ confirm_admin_sudo_separate_password_fallback() {
   while true; do
     if ! ui_prompt_input \
       "第 4.2 段 sudo 密码限制说明" \
-      "当前实现不支持独立 sudo 密码。\n如果继续，sudo 仍使用 ${ADMIN_USER} 的账户密码。\n输入 yes 继续，输入 0 返回。" \
+      "当前实现不支持独立 sudo 密码。\n如果继续，sudo 仍使用 ${ADMIN_USER} 的账户密码。\n输入 y 继续（yes 也可），输入 0 返回。" \
       "yes"; then
       die "无法读取 sudo 密码限制确认，请在交互式终端中执行。"
     fi
 
     answer="$(ui_trim_value "${UI_LAST_INPUT}")"
-    case "${answer}" in
-      yes|YES|y|Y)
-        return 0
-        ;;
-      0)
-        return 1
-        ;;
-      *)
-        ui_warn_message "输入无效" "请输入 yes 继续，或输入 0 返回重新选择 sudo 密码方案。"
-        ;;
-    esac
+    if ui_input_is_affirmative "${answer}"; then
+      return 0
+    fi
+    if [[ "${answer}" == "0" ]]; then
+      return 1
+    fi
+    ui_warn_message "输入无效" "请输入 y 继续（yes 也可），或输入 0 返回重新选择 sudo 密码方案。"
   done
 }
 
@@ -203,23 +199,19 @@ confirm_account_password_lock_risk() {
   while true; do
     if ! ui_prompt_input \
       "第 4.3 段 锁定账户密码风险确认" \
-      "当前 authorized_keys 还没安装成功。\n如果现在锁账户密码，这个账户之后就不能再用密码认证。\n输入 yes 继续锁定，输入 0 返回。" \
+      "当前 authorized_keys 还没安装成功。\n如果现在锁账户密码，这个账户之后就不能再用密码认证。\n输入 y 继续锁定（yes 也可），输入 0 返回。" \
       "0"; then
       return 1
     fi
 
     answer="$(ui_trim_value "${UI_LAST_INPUT}")"
-    case "${answer}" in
-      yes|YES|y|Y)
-        return 0
-        ;;
-      0|"")
-        return 1
-        ;;
-      *)
-        ui_warn_message "输入无效" "请输入 yes 继续锁定，或输入 0 返回。"
-        ;;
-    esac
+    if ui_input_is_affirmative "${answer}"; then
+      return 0
+    fi
+    if [[ "${answer}" == "0" || -z "${answer}" ]]; then
+      return 1
+    fi
+    ui_warn_message "输入无效" "请输入 y 继续锁定（yes 也可），或输入 0 返回。"
   done
 }
 

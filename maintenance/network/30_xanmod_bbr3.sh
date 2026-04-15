@@ -42,6 +42,8 @@ main() {
   local bbr_state="no"
   local bbr3_state="no"
   local package_name=""
+  local candidate_packages=""
+  local available_packages=""
   local installed_kernel=""
   local reboot_required="no"
 
@@ -50,18 +52,29 @@ main() {
   network_tuning_kernel_supports_bbr && bbr_state="yes"
   network_tuning_kernel_supports_bbr3 && bbr3_state="yes"
 
-  package_name="$(network_tuning_xanmod_package_name)" || die "当前架构不支持自动安装 XanMod MAIN 仓库内核。"
+  if ! network_tuning_xanmod_preferred_packages >/dev/null 2>&1; then
+    die "当前架构不支持自动安装 XanMod MAIN 仓库内核。"
+  fi
 
   log info "当前运行内核: ${current_kernel}"
   log info "当前是否为 XanMod: ${xanmod_state}"
   log info "当前是否支持 bbr: ${bbr_state}"
   log info "当前是否支持 bbr3(推断): ${bbr3_state}"
-  log info "目标 XanMod 包: ${package_name}"
 
   apt_install_packages ca-certificates wget gpg lsb-release
   install_xanmod_repo_key
   apply_managed_file "$(network_tuning_xanmod_repo_list_path)" "0644" "$(network_tuning_xanmod_repo_line)" "true"
   refresh_xanmod_apt_index
+
+  candidate_packages="$(network_tuning_xanmod_preferred_packages 2>/dev/null | tr '\n' ',' | sed 's/,$//; s/,/, /g' || true)"
+  available_packages="$(network_tuning_xanmod_available_packages 2>/dev/null | tr '\n' ',' | sed 's/,$//; s/,/, /g' || true)"
+  package_name="$(network_tuning_select_xanmod_package_from_repo || true)"
+
+  log info "当前候选 XanMod 包: ${candidate_packages:-none}"
+  log info "当前仓库可见 XanMod 包: ${available_packages:-none}"
+  [[ -n "${package_name}" ]] || die "当前仓库未提供适合该机器的 XanMod 包。"
+  log info "最终选中的 XanMod 包: ${package_name}"
+
   apt_install_packages "${package_name}"
 
   installed_kernel="$(network_tuning_highest_installed_xanmod_kernel || true)"

@@ -65,7 +65,7 @@ main() {
   init_runtime
 
   while true; do
-    if ! ui_prompt_input "3.5 IPv6 管理" $'1. 临时禁用 IPv6\n2. 永久禁用 IPv6\n3. 恢复 IPv6\n4. 查看当前 IPv6 状态\n0. 返回'; then
+    if ! ui_prompt_input "5. IPv6 管理" $'1. 临时禁用 IPv6\n2. 永久禁用 IPv6\n3. 恢复 IPv6\n4. 查看当前 IPv6 状态\n0. 返回'; then
       return 0
     fi
 

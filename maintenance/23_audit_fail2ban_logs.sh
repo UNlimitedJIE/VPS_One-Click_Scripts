@@ -22,29 +22,32 @@ main() {
   require_root
 
   if ! service_exists "fail2ban"; then
-    log warn "fail2ban is not installed."
+    log info "$(readonly_status_block "Fail2Ban 与登录日志" "fail2ban=not installed; sshd_jail=not loaded; recent_ssh_failures=unknown" "systemctl status fail2ban; fail2ban-client status sshd; journalctl -u $(ssh_service_name)" "no")"
     return 0
   fi
 
-  local ssh_unit fail_count jail_status report
+  local ssh_unit fail_count jail_status jail_loaded report passed
   ssh_unit="$(ssh_service_name)"
   fail_count="$(journalctl -u "${ssh_unit}" --since "7 days ago" --no-pager 2>/dev/null | grep -Ec 'Failed password|Invalid user' || true)"
+  jail_loaded="no"
+  passed="no"
 
   if command_exists fail2ban-client && service_active "fail2ban"; then
     jail_status="$(fail2ban-client status sshd 2>/dev/null || true)"
+    [[ -n "${jail_status}" ]] && jail_loaded="yes"
   else
     jail_status="fail2ban-client unavailable or service inactive"
   fi
 
-  report="$(cat <<EOF
-Audit time: $(date -Iseconds)
-Fail2Ban active: $(service_active "fail2ban" && echo yes || echo no)
-Recent SSH failures (7 days): ${fail_count}
+  if service_active "fail2ban" && [[ "${jail_loaded}" == "yes" ]]; then
+    passed="yes"
+  fi
 
-Fail2Ban sshd status:
-${jail_status}
-EOF
-)"
+  report="$(readonly_status_block \
+    "Fail2Ban 与登录日志" \
+    "fail2ban_active=$(service_active "fail2ban" && echo yes || echo no); sshd_jail_loaded=${jail_loaded}; recent_ssh_failures=${fail_count}" \
+    "systemctl is-active fail2ban; fail2ban-client status sshd; journalctl -u ${ssh_unit} --since 7 days ago" \
+    "${passed}")"
 
   log info "${report}"
 

@@ -11,7 +11,7 @@ prompt_dns_mode() {
   local choice=""
 
   while true; do
-    if ! ui_prompt_input "3.3 DNS 净化" $'请选择 DNS 模式：\n1. 国外模式（Google + Cloudflare，强制 DoT）\n2. 国内模式（阿里云 + DNSPod，不启用 DoT）\n0. 返回'; then
+    if ! ui_prompt_input "3. DNS 净化" $'请选择 DNS 模式：\n1. 国外模式（Google + Cloudflare，强制 DoT）\n2. 国内模式（阿里云 + DNSPod，不启用 DoT）\n0. 返回'; then
       return 1
     fi
 

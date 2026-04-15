@@ -150,7 +150,13 @@ main() {
   service_name="$(network_tuning_realm_service_name || true)"
   config_path="$(network_tuning_realm_config_path || true)"
 
-  [[ -n "${service_name}" || -n "${config_path}" || "$(command -v realm 2>/dev/null || true)" != "" ]] || die "未检测到 Realm。"
+  if [[ -z "${service_name}" && -z "${config_path}" && "$(command -v realm 2>/dev/null || true)" == "" ]]; then
+    log info "当前未检测到 Realm"
+    log info "结论: 未适用 / skipped"
+    set_state "NETWORK_REALM_TIMEOUT_FIXED" "skipped"
+    return 0
+  fi
+
   [[ -n "${config_path}" && -f "${config_path}" ]] || die "已检测到 Realm，但未找到可修改的配置文件。"
 
   config_format="$(network_tuning_realm_config_format "${config_path}")"

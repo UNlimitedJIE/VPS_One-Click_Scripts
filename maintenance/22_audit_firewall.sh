@@ -22,37 +22,28 @@ main() {
   require_root
 
   local report=""
-  report+="Audit time: $(date -Iseconds)"$'\n'
-  report+="Warning: this view only reflects the server itself."$'\n'
-  report+="If your cloud provider also has security-group / cloud-firewall rules, you must keep them in sync manually."$'\n'
-  report+=$'\n'
-  report+="nftables enabled: "
+  local nft_state="no"
+  local ssh_port=""
+  local listening_ports=""
+  local current=""
+  local evidence=""
+  local passed="no"
+
   if service_enabled "nftables" && service_active "nftables"; then
-    report+="yes"$'\n'
-  else
-    report+="no"$'\n'
+    nft_state="yes"
   fi
 
-  report+="Configured SSH port: $(current_ssh_port)"$'\n'
-  report+=$'\n'
-  report+="Listening TCP ports:"$'\n'
+  ssh_port="$(current_ssh_port)"
+  listening_ports="$(listening_tcp_ports | paste -sd ',' - || true)"
+  [[ -n "${listening_ports}" ]] || listening_ports="none"
 
-  local port
-  while IFS= read -r port; do
-    [[ -n "${port}" ]] || continue
-    report+="- ${port}"$'\n'
-    if [[ "${port}" != "$(current_ssh_port)" ]]; then
-      report+="  review: service is listening on ${port}; ensure nftables/security-group policy matches intent."$'\n'
-    fi
-  done < <(listening_tcp_ports)
-
-  report+=$'\n'
-  report+="Current nftables ruleset:"$'\n'
-  if command_exists nft; then
-    report+="$(nft list ruleset 2>/dev/null || echo "nft list ruleset failed")"$'\n'
-  else
-    report+="nft command not found"$'\n'
+  if [[ "${nft_state}" == "yes" ]]; then
+    passed="yes"
   fi
+
+  current="nftables=${nft_state}; ssh_port=${ssh_port}; listening_ports=${listening_ports}"
+  evidence="systemctl is-enabled/is-active nftables; ss -ltn; nft list ruleset"
+  report="$(readonly_status_block "防火墙与监听端口检查" "${current}" "${evidence}" "${passed}")"
 
   log info "${report}"
 

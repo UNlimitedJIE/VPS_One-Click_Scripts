@@ -21,22 +21,18 @@ confirm_stage_checkpoint() {
   ui_require_interactive || die "${title} 需要交互确认，请在交互式终端中执行。"
 
   while true; do
-    if ! ui_prompt_input "${title}" "${body}\n输入 yes 开始，输入 0 返回："; then
+    if ! ui_prompt_input "${title}" "${body}\n输入 y 开始（yes 也可），输入 0 返回："; then
       return 1
     fi
 
     answer="$(ui_trim_value "${UI_LAST_INPUT}")"
-    case "${answer}" in
-      yes|YES|y|Y)
-        return 0
-        ;;
-      0)
-        return 1
-        ;;
-      *)
-        ui_warn_message "输入无效" "请输入 yes 继续，或输入 0 取消本次执行。"
-        ;;
-    esac
+    if ui_input_is_affirmative "${answer}"; then
+      return 0
+    fi
+    if [[ "${answer}" == "0" ]]; then
+      return 1
+    fi
+    ui_warn_message "输入无效" "请输入 y 继续（yes 也可），或输入 0 取消本次执行。"
   done
 }
 

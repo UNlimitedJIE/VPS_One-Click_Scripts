@@ -13,6 +13,32 @@ ui_trim_value() {
   printf '%s' "${value}"
 }
 
+ui_input_is_affirmative() {
+  local value=""
+  value="$(ui_trim_value "${1:-}")"
+
+  case "${value}" in
+    y|Y|yes|YES|Yes)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+ui_input_is_negative() {
+  local value=""
+  value="$(ui_trim_value "${1:-}")"
+
+  case "${value}" in
+    n|N|no|NO|No)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
 ui_open_tty() {
   if [[ "${UI_TTY_STATUS}" == "open" ]]; then
     if [[ -n "${UI_TTY_FD:-}" && -e "/dev/fd/${UI_TTY_FD}" ]]; then
@@ -119,6 +145,32 @@ ui_require_interactive() {
   ui_is_interactive
 }
 
+ui_can_clear_screen() {
+  ui_is_interactive || return 1
+  [[ -n "${TERM:-}" && "${TERM}" != "dumb" ]]
+}
+
+ui_clear_screen() {
+  ui_can_clear_screen || return 0
+
+  if ui_open_tty; then
+    printf '\033[H\033[2J\033[3J' >"/dev/fd/${UI_TTY_FD}"
+    return 0
+  fi
+
+  if [[ -t 2 ]]; then
+    printf '\033[H\033[2J\033[3J' >&2
+    return 0
+  fi
+
+  if [[ -t 1 ]]; then
+    printf '\033[H\033[2J\033[3J'
+    return 0
+  fi
+
+  return 0
+}
+
 ui_show_text_block() {
   local title="$1"
   local body="$2"
@@ -151,10 +203,10 @@ ui_confirm_text() {
   ui_require_interactive || return 1
 
   ui_print_raw "\n${title}\n${body}\n"
-  ui_print_raw "继续执行请输入 yes："
+  ui_print_raw "输入 y 继续（yes 也可）："
   ui_flush_output || true
   ui_read_line || return 1
-  [[ "$(ui_trim_value "${UI_LAST_INPUT}")" == "yes" ]]
+  ui_input_is_affirmative "${UI_LAST_INPUT}"
 }
 
 ui_confirm_with_back() {
@@ -166,20 +218,20 @@ ui_confirm_with_back() {
     result="$(
       whiptail \
         --title "${title}" \
-        --inputbox "${body}\n\n输入 yes 继续执行\n输入 0 返回上一级菜单" 28 110 "" \
+        --inputbox "${body}\n\n输入 y 继续（yes 也可）\n输入 0 返回上一级菜单" 28 110 "" \
         3>&1 1>&2 2>&3
     )" || return 1
-    [[ "$(ui_trim_value "${result}")" == "yes" ]]
+    ui_input_is_affirmative "${result}"
     return $?
   fi
 
   ui_require_interactive || return 1
 
   ui_print_raw "\n${title}\n${body}\n"
-  ui_print_raw "输入 yes 继续执行，输入 0 返回上一级菜单："
+  ui_print_raw "输入 y 继续（yes 也可），输入 0 返回上一级菜单："
   ui_flush_output || true
   ui_read_line || return 1
-  [[ "$(ui_trim_value "${UI_LAST_INPUT}")" == "yes" ]]
+  ui_input_is_affirmative "${UI_LAST_INPUT}"
 }
 
 ui_confirm_enter_or_zero() {
@@ -273,6 +325,20 @@ ui_show_plain_and_wait() {
   ui_wait_for_enter "${prompt}"
 }
 
+ui_show_status_page_and_wait() {
+  local title="$1"
+  local current="$2"
+  local evidence="$3"
+  local passed="$4"
+  local prompt="${5:-按回车返回菜单：}"
+
+  ui_require_interactive || return 1
+
+  ui_print_raw "\n${title}\n当前状态：${current}\n依据：${evidence}\n是否通过：${passed}\n\n"
+  ui_flush_output || true
+  ui_wait_for_enter "${prompt}"
+}
+
 ui_choose_phase() {
   local default_phase="${1:-init}"
   UI_LAST_INPUT=""
@@ -281,13 +347,14 @@ ui_choose_phase() {
   ui_require_interactive || return 1
 
   while true; do
+    ui_clear_screen || true
     ui_print_raw $'\nVPS 初始化与维护根菜单\n\n'
     ui_print_raw $'1. 初始化菜单\n'
     ui_print_raw $'   进入初始化菜单，按数字执行各阶段。\n'
     ui_print_raw $'2. 长期维护菜单\n'
     ui_print_raw $'   进入长期维护菜单，处理更新、巡检、端口管理等日常维护。\n'
     ui_print_raw $'3. 网络调优\n'
-    ui_print_raw $'   进入 3.1 到 3.7 的网络调优子菜单。\n'
+    ui_print_raw $'   进入网络调优子菜单。\n'
     ui_print_raw $'0. 退出程序\n\n'
     ui_print_raw "请输入编号："
     ui_read_line || return 1

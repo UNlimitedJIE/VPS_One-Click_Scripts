@@ -50,7 +50,7 @@ prompt_bandwidth_mbps() {
   local speed=""
 
   while true; do
-    if ! ui_prompt_input "3.2 BBR 直连/落地优化" $'请选择带宽档位：\n1. 自动测速\n2. 500M\n3. 700M\n4. 1G\n5. 自定义\n0. 返回'; then
+    if ! ui_prompt_input "2. BBR 直连/落地优化" $'请选择带宽档位：\n1. 自动测速\n2. 500M\n3. 700M\n4. 1G\n5. 自定义\n0. 返回'; then
       return 1
     fi
 
@@ -210,7 +210,7 @@ main() {
   local service_name=""
   local tc_summary=""
 
-  network_tuning_kernel_supports_bbr || die "当前内核不支持 bbr，不能继续执行 3.2。"
+  network_tuning_kernel_supports_bbr || die "当前内核不支持 bbr，不能继续执行 2。"
 
   bandwidth_mbps="$(prompt_bandwidth_mbps)" || return 0
   region="$(prompt_region_profile)" || return 0

@@ -1327,6 +1327,11 @@ module_prerequisite_conditions_satisfied() {
 dependency_assessment_status() {
   local module_id="${1:-}"
 
+  if dependency_token_is_placeholder "${module_id}"; then
+    printf '%s\n' "completion_state_found"
+    return 0
+  fi
+
   if module_completion_state_found "${module_id}"; then
     printf '%s\n' "completion_state_found"
     return 0
@@ -1515,11 +1520,46 @@ step_label_zh() {
 
 optional_field_zh() {
   local value="${1:-}"
-  if [[ -z "${value}" || "${value}" == "-" ]]; then
+  if dependency_token_is_placeholder "${value}"; then
     echo "无"
   else
     echo "${value}"
   fi
+}
+
+shell_trim_value() {
+  local value="${1:-}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s\n' "${value}"
+}
+
+dependency_token_is_placeholder() {
+  local value=""
+  value="$(shell_trim_value "${1:-}")"
+
+  case "${value}" in
+    ""|"-"|无|none|None|NONE|n/a|N/A)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+readonly_status_block() {
+  local title="${1:-}"
+  local current="${2:-}"
+  local evidence="${3:-}"
+  local passed="${4:-}"
+
+  cat <<EOF
+[${title}]
+当前状态：${current}
+依据：${evidence}
+是否通过：${passed}
+
+EOF
 }
 
 selection_contains() {
@@ -2132,10 +2172,65 @@ network_tuning_xanmod_level() {
   printf '%s\n' "x64v2"
 }
 
-network_tuning_xanmod_package_name() {
+network_tuning_xanmod_preferred_packages() {
+  local arch=""
   local level=""
-  level="$(network_tuning_xanmod_level)" || return 1
-  printf 'linux-xanmod-%s\n' "${level}"
+
+  arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+
+  case "${arch}" in
+    amd64|x86_64)
+      level="$(network_tuning_xanmod_level || true)"
+      if [[ "${level}" == "x64v3" ]]; then
+        printf '%s\n' linux-xanmod-x64v3 linux-xanmod-x64v2 linux-xanmod-x64v1
+      else
+        printf '%s\n' linux-xanmod-x64v2 linux-xanmod-x64v1
+      fi
+      ;;
+    arm64|aarch64)
+      printf '%s\n' "linux-xanmod-arm64"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+network_tuning_xanmod_available_packages() {
+  command_exists apt-cache || return 1
+  apt-cache pkgnames 2>/dev/null | grep '^linux-xanmod-' | awk 'NF && !seen[$0]++'
+}
+
+network_tuning_xanmod_matching_packages() {
+  local candidate=""
+  local -a available=()
+  local -a matched=()
+
+  mapfile -t available < <(network_tuning_xanmod_available_packages || true)
+  ((${#available[@]} > 0)) || return 1
+
+  while IFS= read -r candidate; do
+    [[ -n "${candidate}" ]] || continue
+    selection_contains "${candidate}" "${available[@]}" || continue
+    matched+=("${candidate}")
+  done < <(network_tuning_xanmod_preferred_packages || true)
+
+  ((${#matched[@]} > 0)) || return 1
+  printf '%s\n' "${matched[@]}"
+}
+
+network_tuning_select_xanmod_package_from_repo() {
+  local selected=""
+  selected="$(network_tuning_xanmod_matching_packages 2>/dev/null | head -n 1 || true)"
+  [[ -n "${selected}" ]] || return 1
+  printf '%s\n' "${selected}"
+}
+
+network_tuning_xanmod_package_name() {
+  local selected=""
+  selected="$(network_tuning_select_xanmod_package_from_repo || true)"
+  [[ -n "${selected}" ]] || return 1
+  printf '%s\n' "${selected}"
 }
 
 network_tuning_xanmod_repo_keyring_path() {
