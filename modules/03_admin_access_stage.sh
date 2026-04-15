@@ -143,16 +143,12 @@ confirm_stage_admin_user_selection() {
 stage_intro_body() {
   cat <<EOF
 即将开始第 4 步：管理用户接入。
-这里还不是设置具体参数，只是确认是否开始。
 
-接下来会依次进入：
+接下来会依次完成：
 1. 4.1 确认管理用户名
 2. 4.2 配置 sudo 行为
 3. 4.3 配置并验证 SSH 公钥
-4. SSH 接入准备
-
-这里不再单独配置账户密码。
-如果选择 sudo=password，后续会直接设置该管理用户用于 sudo 验证的本地密码。
+4. 执行 SSH 接入准备
 EOF
 }
 

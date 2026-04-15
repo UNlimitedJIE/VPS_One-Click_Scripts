@@ -53,16 +53,30 @@ authorized_keys_source_status_message() {
   local source_file="$1"
 
   if [[ ! -e "${source_file}" ]]; then
-    printf '固定公钥源文件不存在：%s\n' "${source_file}"
+    printf '未检测到可用公钥源文件：%s\n' "${source_file}"
     return 0
   fi
 
   if [[ ! -s "${source_file}" ]]; then
-    printf '固定公钥源文件为空：%s\n' "${source_file}"
+    printf '当前公钥源文件为空：%s\n' "${source_file}"
     return 0
   fi
 
-  printf '固定公钥源文件里没有检测到有效公钥：%s\n' "${source_file}"
+  printf '当前公钥源文件里没有检测到有效 SSH 公钥：%s\n' "${source_file}"
+}
+
+confirm_existing_authorized_keys_source_install() {
+  local source_file="$1"
+  local auth_file="$2"
+
+  if is_true "${PLAN_ONLY:-false}" || is_true "${DRY_RUN:-false}"; then
+    log info "[plan] detected valid authorized_keys source: ${source_file}"
+    return 0
+  fi
+
+  ui_confirm_enter_or_zero \
+    "第 4.3 段 安装 SSH 公钥" \
+    "当前目标用户：${ADMIN_USER}\n当前目标文件：${auth_file}\n当前源文件：${source_file}\n已检测到可用公钥源文件。\n按回车继续安装，输入 0 取消"
 }
 
 single_line_ssh_public_key_is_valid() {
@@ -129,7 +143,7 @@ capture_authorized_keys_source_via_paste() {
 当前目标用户：${ADMIN_USER}
 当前目标文件：${auth_file}
 当前源文件：${source_file}
-现在正在等待你粘贴一整行 SSH 公钥，粘贴后按回车。
+请现在粘贴一整行 SSH 公钥，粘贴后按回车。
 输入 0 取消"; then
       return 1
     fi
@@ -265,6 +279,10 @@ main() {
 
   if resolve_authorized_keys_source; then
     source_file="${_AUTHORIZED_KEYS_RESOLVED_SOURCE_FILE}"
+  fi
+
+  if [[ -n "${source_file}" ]]; then
+    confirm_existing_authorized_keys_source_install "${source_file}" "${auth_file}" || die "第 4.3 段已取消。"
   fi
 
   if [[ -z "${source_file}" ]]; then

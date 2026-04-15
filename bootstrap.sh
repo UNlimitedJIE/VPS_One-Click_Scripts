@@ -28,7 +28,6 @@ Usage:
 Menu shortcuts:
   Root menu: 0 = 退出程序
   Any submenu: 0 = 返回上一级菜单
-  Init list menu: 99 = 从第 2 步开始顺序执行到指定步骤
   Maintain menu: 9 = 顺序执行 1 到 8
   Network menu: 0 = 返回上一级菜单
 
@@ -1049,13 +1048,10 @@ render_init_menu_prompt() {
     header+="   ${short_desc_zh}"$'\n'
   done < <(registry_lines "init")
 
-  header+=$'99. 从第 2 步开始顺序执行到指定步骤\n'
-  header+=$'   从第 2 步起，按顺序执行到你指定的目标步骤。\n'
   header+=$'0. 返回上一级菜单\n\n'
   header+=$'输入规则：\n'
   header+=$'- 输入单个数字，例如 6，直接执行第 6 步\n'
   header+=$'- 输入多个数字，例如 2,3,4，按输入顺序执行这些步骤\n'
-  header+=$'- 输入 99，进入“从第 2 步开始顺序执行到指定步骤”模式\n'
 
   printf '%s' "${header}"
 }
@@ -1292,55 +1288,6 @@ menu_port_management_phase() {
   done
 }
 
-prompt_init_sequence_selection() {
-  local max_step=""
-  max_step="$(max_init_step_number)"
-
-  while true; do
-    local target_step=""
-    local target_step_num=0
-    if ! ui_prompt_input "顺序执行模式" "请输入目标步骤号。\n0 = 返回上一级菜单\n有效范围：2-${max_step}\n\n说明：将从第 2 步开始，按顺序一直执行到你输入的步骤号。"; then
-      return 1
-    fi
-    target_step="$(ui_trim_value "${UI_LAST_INPUT}")"
-
-    if [[ -z "${target_step}" ]]; then
-      ui_warn_message "输入为空" "请输入 2 到 ${max_step} 之间的目标步骤号；输入 0 返回上一级菜单。"
-      continue
-    fi
-
-    if [[ "${target_step}" == "0" ]]; then
-      return 1
-    fi
-
-    if [[ ! "${target_step}" =~ ^[0-9]+$ ]]; then
-      ui_warn_message "输入无效" "请输入数字步骤号。有效范围为 2 到 ${max_step}；输入 0 返回上一级菜单。"
-      continue
-    fi
-
-    target_step_num=$((10#${target_step}))
-
-    if (( target_step_num < 2 || target_step_num > max_step )); then
-      ui_warn_message "输入无效" "目标步骤号必须在 2 到 ${max_step} 之间；输入 0 返回上一级菜单。"
-      continue
-    fi
-
-    local sequence_ids=()
-    mapfile -t sequence_ids < <(build_init_sequence_to_step "${target_step_num}")
-    ((${#sequence_ids[@]} > 0)) || {
-      ui_warn_message "无法执行" "没有找到可执行的步骤范围，请检查模块注册表。"
-      return 1
-    }
-
-    local summary=""
-    summary="$(render_execution_summary "init" "${sequence_ids[@]}")"
-    ui_confirm_with_back "确认顺序执行" "你将按顺序执行以下步骤：\n\n${summary}" || return 1
-
-    printf '%s\n' "${sequence_ids[@]}"
-    return 0
-  done
-}
-
 confirm_maintain_sequence() {
   local sequence_ids=("$@")
   local summary=""
@@ -1446,22 +1393,12 @@ menu_init_phase() {
     raw_input="$(ui_trim_value "${UI_LAST_INPUT}")"
 
     if [[ -z "${raw_input}" ]]; then
-      ui_warn_message "输入为空" "请输入步骤编号，例如 6、2,3,4 或 99。"
+      ui_warn_message "输入为空" "请输入步骤编号，例如 6 或 2,3,4。"
       continue
     fi
 
     if [[ "${raw_input}" == "0" ]]; then
       return 0
-    fi
-
-    if [[ "${raw_input}" == "99" ]]; then
-      local sequence_ids=()
-      local sequence_summary=""
-      mapfile -t sequence_ids < <(prompt_init_sequence_selection || true)
-      ((${#sequence_ids[@]} > 0)) || continue
-      sequence_summary="$(menu_action_summary "init" "${sequence_ids[@]}")"
-      menu_execute_with_feedback "${sequence_summary}" run_phase_from_registry "init" "menu" "${sequence_ids[@]}" || true
-      continue
     fi
 
     local raw_tokens=()
@@ -1481,11 +1418,6 @@ menu_init_phase() {
 
     if selection_contains "0" "${raw_tokens[@]}"; then
       ui_warn_message "输入无效" "如果要返回上一级菜单，请只输入 0。"
-      continue
-    fi
-
-    if selection_contains "99" "${raw_tokens[@]}"; then
-      ui_warn_message "输入无效" "99 只适用于初始化菜单，且必须单独输入。"
       continue
     fi
 

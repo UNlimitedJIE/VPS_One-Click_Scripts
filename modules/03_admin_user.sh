@@ -126,7 +126,7 @@ capture_admin_sudo_mode() {
   while true; do
     if ! ui_prompt_input \
       "第 4.2 段 配置 sudo 行为" \
-      "当前正在设置：sudo 是否需要密码\n- nopasswd = sudo 不需要密码\n- password = sudo 需要密码\n- 0 = 返回\n如果选择 password，接下来会让你设置该管理用户用于 sudo 验证的密码。\n这里不再单独配置账户密码。" \
+      "当前正在设置：sudo 是否需要密码\n- nopasswd = 执行 sudo 不需要密码\n- password = 执行 sudo 需要密码\n- 如果选择 password，接下来会设置该管理用户用于 sudo 验证的密码\n- 0 = 返回" \
       "${default_mode}"; then
       die "无法读取 sudo 模式选择，请在交互式终端中执行。"
     fi
