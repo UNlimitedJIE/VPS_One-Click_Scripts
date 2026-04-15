@@ -1351,13 +1351,14 @@ registry_unique_dependencies() {
   registry_lines "${phase}" | awk -F '\t' '
     {
       deps = $8
-      if (deps == "" || deps == "-") {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", deps)
+      if (deps == "" || deps == "-" || deps == "无") {
         next
       }
       count = split(deps, items, ",")
       for (i = 1; i <= count; i++) {
         gsub(/^[[:space:]]+|[[:space:]]+$/, "", items[i])
-        if (items[i] != "" && items[i] != "-" && !seen[items[i]]++) {
+        if (items[i] != "" && items[i] != "-" && items[i] != "无" && !seen[items[i]]++) {
           print items[i]
         }
       }
@@ -2182,13 +2183,25 @@ network_tuning_xanmod_preferred_packages() {
     amd64|x86_64)
       level="$(network_tuning_xanmod_level || true)"
       if [[ "${level}" == "x64v3" ]]; then
-        printf '%s\n' linux-xanmod-x64v3 linux-xanmod-x64v2 linux-xanmod-x64v1
+        printf '%s\n' \
+          linux-xanmod-x64v3 \
+          linux-xanmod-lts-x64v3 \
+          linux-xanmod-x64v2 \
+          linux-xanmod-lts-x64v2 \
+          linux-xanmod-x64v1 \
+          linux-xanmod-lts-x64v1
       else
-        printf '%s\n' linux-xanmod-x64v2 linux-xanmod-x64v1
+        printf '%s\n' \
+          linux-xanmod-x64v2 \
+          linux-xanmod-lts-x64v2 \
+          linux-xanmod-x64v1 \
+          linux-xanmod-lts-x64v1
       fi
       ;;
     arm64|aarch64)
-      printf '%s\n' "linux-xanmod-arm64"
+      printf '%s\n' \
+        linux-xanmod-arm64 \
+        linux-xanmod-lts-arm64
       ;;
     *)
       return 1

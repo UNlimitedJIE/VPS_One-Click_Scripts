@@ -16,9 +16,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
 source "${SCRIPT_DIR}/../lib/common.sh"
 
-fail2ban_jail_backend() {
-  printf '%s\n' "systemd"
-}
+_FAIL2BAN_SELECTED_BACKEND="${_FAIL2BAN_SELECTED_BACKEND:-}"
+_FAIL2BAN_SELECTED_JOURNALMATCH="${_FAIL2BAN_SELECTED_JOURNALMATCH:-}"
+_FAIL2BAN_SELECTED_LOGPATH="${_FAIL2BAN_SELECTED_LOGPATH:-}"
 
 fail2ban_jail_maxretry() {
   printf '%s\n' "5"
@@ -74,6 +74,25 @@ fail2ban_detect_sshd_journalmatch() {
   printf '%s\n' "_COMM=sshd"
 }
 
+fail2ban_auth_log_path() {
+  local candidate=""
+
+  for candidate in /var/log/auth.log /var/log/secure; do
+    [[ -f "${candidate}" ]] || continue
+    printf '%s\n' "${candidate}"
+    return 0
+  done
+
+  return 1
+}
+
+fail2ban_python_systemd_module_available() {
+  command_exists python3 || return 1
+  python3 - <<'PY' >/dev/null 2>&1
+import systemd
+PY
+}
+
 fail2ban_nftables_in_use() {
   package_installed nftables || return 1
   [[ -f "$(nftables_config_path)" ]] || return 1
@@ -124,26 +143,67 @@ fail2ban_detect_banaction() {
   printf '%s\n' "iptables-multiport"
 }
 
+fail2ban_select_backend() {
+  local journalmatch=""
+  local logpath=""
+
+  _FAIL2BAN_SELECTED_BACKEND=""
+  _FAIL2BAN_SELECTED_JOURNALMATCH=""
+  _FAIL2BAN_SELECTED_LOGPATH=""
+
+  journalmatch="$(fail2ban_detect_sshd_journalmatch)"
+
+  if is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
+    _FAIL2BAN_SELECTED_BACKEND="systemd"
+    _FAIL2BAN_SELECTED_JOURNALMATCH="${journalmatch}"
+    return 0
+  fi
+
+  if fail2ban_python_systemd_module_available; then
+    _FAIL2BAN_SELECTED_BACKEND="systemd"
+    _FAIL2BAN_SELECTED_JOURNALMATCH="${journalmatch}"
+    return 0
+  fi
+
+  log info "python3-systemd 不可用，尝试安装以启用 fail2ban systemd backend"
+  if apt_install_packages python3-systemd && fail2ban_python_systemd_module_available; then
+    _FAIL2BAN_SELECTED_BACKEND="systemd"
+    _FAIL2BAN_SELECTED_JOURNALMATCH="${journalmatch}"
+    return 0
+  fi
+
+  log warn "python3-systemd 仍不可用，回退到 SSH 日志文件 backend"
+  logpath="$(fail2ban_auth_log_path || true)"
+  [[ -n "${logpath}" ]] || die "无法使用 systemd backend，且当前未找到可回退的 SSH 日志文件。"
+
+  _FAIL2BAN_SELECTED_BACKEND="auto"
+  _FAIL2BAN_SELECTED_LOGPATH="${logpath}"
+}
+
 fail2ban_render_sshd_local() {
   local backend="$1"
   local journalmatch="$2"
-  local banaction="$3"
-  local port="$4"
-  local maxretry="$5"
-  local findtime="$6"
-  local bantime="$7"
+  local logpath="$3"
+  local banaction="$4"
+  local port="$5"
+  local maxretry="$6"
+  local findtime="$7"
+  local bantime="$8"
 
-  cat <<EOF
+  {
+    cat <<EOF
 [sshd]
 enabled = true
 backend = ${backend}
-journalmatch = ${journalmatch}
 banaction = ${banaction}
 port = ${port}
 maxretry = ${maxretry}
 findtime = ${findtime}
 bantime = ${bantime}
 EOF
+    [[ -n "${journalmatch}" ]] && printf 'journalmatch = %s\n' "${journalmatch}"
+    [[ -n "${logpath}" ]] && printf 'logpath = %s\n' "${logpath}"
+  }
 }
 
 fail2ban_single_line() {
@@ -242,6 +302,8 @@ fail2ban_failure_reason() {
   fi
 
   if [[ "${text}" =~ Unknown[[:space:]]backend ]] || \
+     [[ "${text}" =~ Backend[[:space:]]\'systemd\'[[:space:]]failed[[:space:]]to[[:space:]]initialize ]] || \
+     [[ "${text}" =~ No[[:space:]]module[[:space:]]named[[:space:]]\'systemd\' ]] || \
      [[ "${text}" =~ Unable[[:space:]]to[[:space:]]find[[:space:]]a[[:space:]]corresponding[[:space:]]action ]] || \
      [[ "${text}" =~ No[[:space:]]such[[:space:]]file[[:space:]]or[[:space:]]directory.*action\.d ]] || \
      [[ "${text}" =~ Failed[[:space:]]to[[:space:]]execute[[:space:]].*(iptables|nftables) ]] || \
@@ -264,19 +326,19 @@ fail2ban_failure_suggestion() {
 
   case "${classification}" in
     "config syntax / jail config error")
-      printf '%s\n' "检查 /etc/fail2ban/jail.d/sshd.local 与 fail2ban-client -t 输出中的具体键名或格式错误。"
+      printf '%s\n' "检查 /etc/fail2ban/jail.d/sshd.local 与 fail2ban-client -t 输出。"
       ;;
     "journalmatch / log source error")
-      printf '%s\n' "检查 ssh.service/sshd.service 的实际 unit 名称，以及 journalctl 中是否存在 sshd 记录。"
+      printf '%s\n' "检查 ssh 日志来源与 journalmatch/logpath。"
       ;;
     "banaction / backend error")
-      printf '%s\n' "检查 fail2ban 的 nftables/iptables action 文件是否存在，并确认当前防火墙后端与 banaction 匹配。"
+      printf '%s\n' "检查 backend 依赖与 banaction。"
       ;;
     "startup timeout / service not ready")
-      printf '%s\n' "服务在重启后未在超时内 ready；先复查 systemctl status fail2ban 与 journalctl -u fail2ban 的最近启动日志。"
+      printf '%s\n' "服务重启后未在超时内 ready。"
       ;;
     *)
-      printf '%s\n' "查看 systemctl status fail2ban、journalctl -u fail2ban 和 fail2ban-client -t 的完整输出定位问题。"
+      printf '%s\n' "查看 fail2ban 近期启动摘要。"
       ;;
   esac
 }
@@ -285,7 +347,7 @@ fail2ban_extract_key_lines() {
   local text="${1:-}"
 
   printf '%s\n' "${text}" | awk '
-    /Failed during configuration|Have not found any log file|No file\(s\) found for glob|Invalid journalmatch|Failed to access journal|Unknown backend|Unable to find a corresponding action|Failed to execute.*(iptables|nftables)|Failed to start|Main process exited|Connection refused|No such file or directory|fail2ban\.sock|Failed to access socket path|Is the server running|ERROR|status=/ {
+    /Failed during configuration|Have not found any log file|No file\(s\) found for glob|Invalid journalmatch|Failed to access journal|Unknown backend|Backend .systemd. failed to initialize|No module named .systemd.|Unable to find a corresponding action|Failed to execute.*(iptables|nftables)|Failed to start|Main process exited|Connection refused|No such file or directory|fail2ban\.sock|Failed to access socket path|Is the server running|ERROR|status=/ {
       gsub(/^[[:space:]]+/, "", $0)
       if (!seen[$0]++) {
         print
@@ -305,22 +367,21 @@ fail2ban_report_failure() {
   local diagnostics=""
   local classification=""
   local summary_lines=""
-  local suggestion=""
   local line=""
+  local compact_summary=""
+  local report=""
 
   diagnostics="$(fail2ban_collect_diagnostics)"
   classification="$(fail2ban_failure_reason "${context}" "${command_output}"$'\n'"${diagnostics}")"
   summary_lines="$(fail2ban_extract_key_lines "${command_output}"$'\n'"${diagnostics}")"
-  suggestion="$(fail2ban_failure_suggestion "${classification}")"
+  compact_summary="$(printf '%s\n' "${summary_lines}" | tr '\n' ';' | sed 's/;$/ /; s/;;*/;/g')"
 
-  log warn "fail2ban failure classification: ${classification}"
-  if [[ -n "${summary_lines}" ]]; then
-    while IFS= read -r line; do
-      [[ -n "${line}" ]] || continue
-      log warn "diagnostic summary: $(fail2ban_single_line "${line}")"
-    done <<< "${summary_lines}"
-  fi
-  log warn "next step: ${suggestion}"
+  report="$(readonly_status_block \
+    "Fail2Ban" \
+    "service=failed; sshd_jail_loaded=no; backend=${FAIL2BAN_BACKEND:-<unset>}" \
+    "classification=${classification}; source=${FAIL2BAN_SOURCE_LABEL:-<unset>}; summary=$(fail2ban_single_line "${compact_summary:-no key summary}")" \
+    "no")"
+  log info "${report}"
 
   die "${failure_prefix}。classification=${classification}；backend=${FAIL2BAN_BACKEND:-<unset>}；journalmatch=${FAIL2BAN_SSHD_JOURNALMATCH:-<unset>}；banaction=${FAIL2BAN_BANACTION:-<unset>}。"
 }
@@ -370,25 +431,31 @@ fail2ban_wait_for_ready() {
 fail2ban_log_summary() {
   local backend="$1"
   local journalmatch="$2"
-  local banaction="$3"
-  local port="$4"
-  local maxretry="$5"
-  local findtime="$6"
-  local bantime="$7"
+  local logpath="$3"
+  local banaction="$4"
+  local port="$5"
+  local maxretry="$6"
+  local findtime="$7"
+  local bantime="$8"
   local service_state=""
+  local source_label=""
+  local report=""
 
   service_state="$(systemctl is-active fail2ban 2>/dev/null || true)"
   [[ -n "${service_state}" ]] || service_state="unknown"
 
-  log info "fail2ban service status: ${service_state}"
-  log info "sshd jail loaded = yes"
-  log info "backend: ${backend}"
-  log info "journalmatch: ${journalmatch}"
-  log info "banaction: ${banaction}"
-  log info "monitored port: ${port}"
-  log info "maxretry: ${maxretry}"
-  log info "findtime: ${findtime}"
-  log info "bantime: ${bantime}"
+  if [[ -n "${journalmatch}" ]]; then
+    source_label="journalmatch=${journalmatch}"
+  else
+    source_label="logpath=${logpath}"
+  fi
+
+  report="$(readonly_status_block \
+    "Fail2Ban" \
+    "service=${service_state}; sshd_jail_loaded=yes; backend=${backend}; banaction=${banaction}; port=${port}" \
+    "${source_label}; maxretry=${maxretry}; findtime=${findtime}; bantime=${bantime}" \
+    "yes")"
+  log info "${report}"
 }
 
 main() {
@@ -409,14 +476,17 @@ main() {
   local jail_file content
   local backend=""
   local journalmatch=""
+  local logpath=""
   local banaction=""
   local port=""
   local maxretry=""
   local findtime=""
   local bantime=""
 
-  backend="$(fail2ban_jail_backend)"
-  journalmatch="$(fail2ban_detect_sshd_journalmatch)"
+  fail2ban_select_backend
+  backend="${_FAIL2BAN_SELECTED_BACKEND}"
+  journalmatch="${_FAIL2BAN_SELECTED_JOURNALMATCH}"
+  logpath="${_FAIL2BAN_SELECTED_LOGPATH}"
   banaction="$(fail2ban_detect_banaction)"
   port="$(fail2ban_effective_ssh_port)"
   maxretry="$(fail2ban_jail_maxretry)"
@@ -425,11 +495,13 @@ main() {
 
   FAIL2BAN_BACKEND="${backend}"
   FAIL2BAN_SSHD_JOURNALMATCH="${journalmatch}"
+  FAIL2BAN_LOGPATH="${logpath}"
+  FAIL2BAN_SOURCE_LABEL="${journalmatch:-${logpath}}"
   FAIL2BAN_BANACTION="${banaction}"
-  export FAIL2BAN_BACKEND FAIL2BAN_SSHD_JOURNALMATCH FAIL2BAN_BANACTION
+  export FAIL2BAN_BACKEND FAIL2BAN_SSHD_JOURNALMATCH FAIL2BAN_LOGPATH FAIL2BAN_SOURCE_LABEL FAIL2BAN_BANACTION
 
   jail_file="/etc/fail2ban/jail.d/sshd.local"
-  content="$(fail2ban_render_sshd_local "${backend}" "${journalmatch}" "${banaction}" "${port}" "${maxretry}" "${findtime}" "${bantime}")"
+  content="$(fail2ban_render_sshd_local "${backend}" "${journalmatch}" "${logpath}" "${banaction}" "${port}" "${maxretry}" "${findtime}" "${bantime}")"
 
   apply_managed_file "${jail_file}" "0644" "${content}" "true"
   run_cmd "Enabling service fail2ban" systemctl enable fail2ban
@@ -440,16 +512,10 @@ main() {
     fail2ban_wait_for_ready 15
     fail2ban_run_checked_command "Checking fail2ban global status" "fail2ban-client status failed" fail2ban-client status
     fail2ban_run_checked_command "Checking fail2ban sshd jail status" "fail2ban-client status sshd failed" fail2ban-client status sshd
-    fail2ban_log_summary "${backend}" "${journalmatch}" "${banaction}" "${port}" "${maxretry}" "${findtime}" "${bantime}"
+    fail2ban_log_summary "${backend}" "${journalmatch}" "${logpath}" "${banaction}" "${port}" "${maxretry}" "${findtime}" "${bantime}"
   else
     if is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
-      log info "backend: ${backend}"
-      log info "journalmatch: ${journalmatch}"
-      log info "banaction: ${banaction}"
-      log info "monitored port: ${port}"
-      log info "maxretry: ${maxretry}"
-      log info "findtime: ${findtime}"
-      log info "bantime: ${bantime}"
+      fail2ban_log_summary "${backend}" "${journalmatch}" "${logpath}" "${banaction}" "${port}" "${maxretry}" "${findtime}" "${bantime}"
     fi
   fi
 

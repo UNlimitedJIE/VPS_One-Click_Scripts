@@ -146,13 +146,18 @@ main() {
   local config_path=""
   local config_format=""
   local snapshot_dir=""
+  local report=""
 
   service_name="$(network_tuning_realm_service_name || true)"
   config_path="$(network_tuning_realm_config_path || true)"
 
   if [[ -z "${service_name}" && -z "${config_path}" && "$(command -v realm 2>/dev/null || true)" == "" ]]; then
-    log info "当前未检测到 Realm"
-    log info "结论: 未适用 / skipped"
+    report="$(readonly_status_block \
+      "Realm timeout 修复" \
+      "当前未检测到 Realm" \
+      "service=not found; config=not found; binary=not found" \
+      "skipped")"
+    log info "${report}"
     set_state "NETWORK_REALM_TIMEOUT_FIXED" "skipped"
     return 0
   fi
@@ -182,9 +187,12 @@ main() {
 
   trap - ERR
 
-  log info "Realm service: ${service_name:-not detected}"
-  log info "Realm config: ${config_path}"
-  log info "Realm timeout fix values: $(realm_current_fix_values "${config_path}" "${config_format}" | tr '\n' ';' | sed 's/;$/ /')"
+  report="$(readonly_status_block \
+    "Realm timeout 修复" \
+    "service=${service_name:-not detected}; config=${config_path}; format=${config_format}" \
+    "$(realm_current_fix_values "${config_path}" "${config_format}" | tr '\n' ';' | sed 's/;$/ /')" \
+    "yes")"
+  log info "${report}"
 
   set_state "NETWORK_REALM_TIMEOUT_FIXED" "yes"
 }

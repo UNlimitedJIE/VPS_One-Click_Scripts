@@ -229,9 +229,10 @@ run_script_path() {
 run_module_from_registry_line() {
   local line="$1"
   local step_no module_id phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh
+  local status=0
   IFS=$'\t' read -r step_no module_id phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh <<<"${line}"
 
-  if is_true "${MENU_EXECUTION_SCREEN_MODE:-false}" && is_false "${PLAN_ONLY:-false}" && is_false "${DRY_RUN:-false}"; then
+  if is_true "${MENU_EXECUTION_SCREEN_MODE:-false}" && is_false "${MENU_EXECUTION_BATCH_MODE:-false}" && is_false "${PLAN_ONLY:-false}" && is_false "${DRY_RUN:-false}"; then
     ui_clear_screen || true
   fi
 
@@ -241,7 +242,10 @@ run_module_from_registry_line() {
     print_module_overview "${line}"
   fi
 
-  run_script_path "${PROJECT_ROOT}/${script_path}" || return $?
+  run_script_path "${PROJECT_ROOT}/${script_path}" || status=$?
+  menu_record_module_result "${line}" "${status}"
+  (( status == 0 )) || return "${status}"
+  return 0
 }
 
 resolve_selection_token() {
@@ -354,6 +358,17 @@ run_phase_from_registry() {
   local selected=("$@")
   local line=""
   local module_id=""
+  local batch_mode="${MENU_EXECUTION_BATCH_MODE:-false}"
+
+  if ((${#selected[@]} == 0 || ${#selected[@]} > 1)); then
+    batch_mode="true"
+  fi
+  export MENU_EXECUTION_BATCH_MODE="${batch_mode}"
+
+  if is_true "${batch_mode}" && is_true "${MENU_EXECUTION_SCREEN_MODE:-false}" && is_false "${PLAN_ONLY:-false}" && is_false "${DRY_RUN:-false}" && is_false "${MENU_BATCH_SCREEN_STARTED:-false}"; then
+    ui_clear_screen || true
+    export MENU_BATCH_SCREEN_STARTED="true"
+  fi
 
   if ((${#selected[@]} > 0)); then
     warn_missing_dependencies "${phase}" "${selected[@]}"
@@ -427,6 +442,24 @@ render_execution_summary() {
   done
 
   printf '%s' "${output}"
+}
+
+menu_record_module_result() {
+  local line="$1"
+  local status="${2:-0}"
+  local step_no module_id phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh
+  local result_label=""
+
+  [[ -n "${MENU_RESULT_ACCUM_FILE:-}" ]] || return 0
+
+  IFS=$'\t' read -r step_no module_id phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh <<<"${line}"
+  if (( status == 0 )); then
+    result_label="通过"
+  else
+    result_label="失败(exit=${status})"
+  fi
+
+  printf '%s %s: %s\n' "$(format_step_header "${phase}" "${step_no}")" "${title_zh}" "${result_label}" >>"${MENU_RESULT_ACCUM_FILE}"
 }
 
 init_module_requires_admin_user() {
@@ -614,6 +647,7 @@ menu_action_summary() {
 menu_show_action_result() {
   local result="$1"
   local summary="$2"
+  local details="${3:-}"
   local current=""
   local evidence=""
   local passed=""
@@ -623,19 +657,19 @@ menu_show_action_result() {
     success)
       title="结果页"
       current="已完成：${summary}"
-      evidence="本次执行已完成；完整日志：${LOG_FILE:-<unset>}"
+      evidence="${details:-本次执行已完成}"
       passed="yes"
       ;;
     failure)
       title="错误页"
       current="执行失败：${summary}"
-      evidence="请查看上方报错输出；完整日志：${LOG_FILE:-<unset>}"
+      evidence="${details:-请查看上方报错输出}"
       passed="no"
       ;;
     *)
       title="结果页"
       current="执行未完成：${summary}"
-      evidence="请查看上方执行输出；完整日志：${LOG_FILE:-<unset>}"
+      evidence="${details:-请查看上方执行输出}"
       passed="no"
       ;;
   esac
@@ -649,13 +683,19 @@ menu_execute_with_feedback() {
   shift || true
   local status=0
   local command_name="${1:-}"
+  local accum_file=""
+  local accumulated_results=""
 
   ensure_runtime_initialized
+  accum_file="$(mktemp)"
 
   set +e
   (
     set -e
     export MENU_EXECUTION_SCREEN_MODE="true"
+    export MENU_EXECUTION_BATCH_MODE="false"
+    export MENU_BATCH_SCREEN_STARTED="false"
+    export MENU_RESULT_ACCUM_FILE="${accum_file}"
     if [[ "${command_name}" != "run_phase_from_registry" && "${command_name}" != "run_network_modules" ]]; then
       ui_clear_screen || true
     fi
@@ -664,16 +704,21 @@ menu_execute_with_feedback() {
   status=$?
   set -e
 
+  if [[ -f "${accum_file}" ]]; then
+    accumulated_results="$(sed '/^[[:space:]]*$/d' "${accum_file}" 2>/dev/null || true)"
+    rm -f "${accum_file}"
+  fi
+
   if (( status == 130 )); then
     return 0
   fi
 
   if (( status == 0 )); then
-    menu_show_action_result "success" "${summary}"
+    menu_show_action_result "success" "${summary}" "${accumulated_results}"
     return 0
   fi
 
-  menu_show_action_result "failure" "${summary}"
+  menu_show_action_result "failure" "${summary}" "${accumulated_results}"
   return 1
 }
 
@@ -1374,6 +1419,17 @@ confirm_network_module_execution() {
 run_network_modules() {
   local selected=("$@")
   local module_id=""
+  local batch_mode="${MENU_EXECUTION_BATCH_MODE:-false}"
+
+  if ((${#selected[@]} > 1)); then
+    batch_mode="true"
+  fi
+  export MENU_EXECUTION_BATCH_MODE="${batch_mode}"
+
+  if is_true "${batch_mode}" && is_true "${MENU_EXECUTION_SCREEN_MODE:-false}" && is_false "${PLAN_ONLY:-false}" && is_false "${DRY_RUN:-false}" && is_false "${MENU_BATCH_SCREEN_STARTED:-false}"; then
+    ui_clear_screen || true
+    export MENU_BATCH_SCREEN_STARTED="true"
+  fi
 
   for module_id in "${selected[@]}"; do
     confirm_network_module_execution "${module_id}" || return 1

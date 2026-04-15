@@ -46,6 +46,7 @@ main() {
   local available_packages=""
   local installed_kernel=""
   local reboot_required="no"
+  local report=""
 
   current_kernel="$(network_tuning_current_kernel)"
   network_tuning_kernel_is_xanmod && xanmod_state="yes"
@@ -56,11 +57,6 @@ main() {
     die "当前架构不支持自动安装 XanMod MAIN 仓库内核。"
   fi
 
-  log info "当前运行内核: ${current_kernel}"
-  log info "当前是否为 XanMod: ${xanmod_state}"
-  log info "当前是否支持 bbr: ${bbr_state}"
-  log info "当前是否支持 bbr3(推断): ${bbr3_state}"
-
   apt_install_packages ca-certificates wget gpg lsb-release
   install_xanmod_repo_key
   apply_managed_file "$(network_tuning_xanmod_repo_list_path)" "0644" "$(network_tuning_xanmod_repo_line)" "true"
@@ -70,10 +66,15 @@ main() {
   available_packages="$(network_tuning_xanmod_available_packages 2>/dev/null | tr '\n' ',' | sed 's/,$//; s/,/, /g' || true)"
   package_name="$(network_tuning_select_xanmod_package_from_repo || true)"
 
-  log info "当前候选 XanMod 包: ${candidate_packages:-none}"
-  log info "当前仓库可见 XanMod 包: ${available_packages:-none}"
-  [[ -n "${package_name}" ]] || die "当前仓库未提供适合该机器的 XanMod 包。"
-  log info "最终选中的 XanMod 包: ${package_name}"
+  if [[ -z "${package_name}" ]]; then
+    report="$(readonly_status_block \
+      "XanMod 内核与 BBR 能力" \
+      "当前仓库未提供适合该机器的 XanMod 包" \
+      "candidates=${candidate_packages:-none}; available=${available_packages:-none}" \
+      "no")"
+    log info "${report}"
+    die "当前仓库未提供适合该机器的 XanMod 包。"
+  fi
 
   apt_install_packages "${package_name}"
 
@@ -82,9 +83,12 @@ main() {
     reboot_required="yes"
   fi
 
-  log info "已安装的 XanMod 内核: ${installed_kernel:-not found}"
-  log info "是否需要重启: ${reboot_required}"
-  log info "不会自动重启。"
+  report="$(readonly_status_block \
+    "XanMod 内核与 BBR 能力" \
+    "kernel=${current_kernel}; xanmod_running=${xanmod_state}; bbr=${bbr_state}; bbr3=${bbr3_state}; selected_package=${package_name}; reboot_required=${reboot_required}" \
+    "candidates=${candidate_packages:-none}; available=${available_packages:-none}; installed=${installed_kernel:-not found}" \
+    "yes")"
+  log info "${report}"
 
   set_state "NETWORK_XANMOD_PACKAGE" "${package_name}"
   set_state "NETWORK_XANMOD_KERNEL_DONE" "yes"

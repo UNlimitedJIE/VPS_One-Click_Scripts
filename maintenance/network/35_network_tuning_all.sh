@@ -24,13 +24,45 @@ render_overview() {
 EOF
 }
 
+NETWORK_TUNING_ALL_SUMMARY="${NETWORK_TUNING_ALL_SUMMARY:-}"
+
+append_network_tuning_all_result() {
+  local label="$1"
+  local result="$2"
+
+  if [[ -n "${NETWORK_TUNING_ALL_SUMMARY}" ]]; then
+    NETWORK_TUNING_ALL_SUMMARY+="; "
+  fi
+  NETWORK_TUNING_ALL_SUMMARY+="${label}=${result}"
+}
+
+network_tuning_all_report() {
+  local current="$1"
+  local passed="$2"
+  local report=""
+
+  report="$(readonly_status_block \
+    "一键执行 1-5" \
+    "${current}" \
+    "${NETWORK_TUNING_ALL_SUMMARY:-no steps recorded}" \
+    "${passed}")"
+  log info "${report}"
+}
+
 run_step_script() {
-  local path="$1"
+  local label="$1"
+  local path="$2"
   local status=0
 
-  log info "Running network tuning step: $(basename "${path}")"
+  log info "Running network tuning step ${label}: $(basename "${path}")"
   bash "${path}" || status=$?
-  (( status == 0 )) || return "${status}"
+  if (( status == 0 )); then
+    append_network_tuning_all_result "${label}" "yes"
+    return 0
+  fi
+
+  append_network_tuning_all_result "${label}" "failed(exit=${status})"
+  return "${status}"
 }
 
 main() {
@@ -42,11 +74,28 @@ main() {
 
   ui_confirm_with_back "确认一键执行 1-5" "$(render_overview)" || return 0
 
-  run_step_script "${PROJECT_ROOT}/maintenance/network/30_xanmod_bbr3.sh"
-  run_step_script "${PROJECT_ROOT}/maintenance/network/31_bbr_landing_optimization.sh"
-  run_step_script "${PROJECT_ROOT}/maintenance/network/32_dns_purification.sh"
-  run_step_script "${PROJECT_ROOT}/maintenance/network/33_realm_timeout_fix.sh"
-  run_step_script "${PROJECT_ROOT}/maintenance/network/34_ipv6_management.sh"
+  if ! run_step_script "1" "${PROJECT_ROOT}/maintenance/network/30_xanmod_bbr3.sh"; then
+    network_tuning_all_report "step=1 failed" "no"
+    return 1
+  fi
+  if ! run_step_script "2" "${PROJECT_ROOT}/maintenance/network/31_bbr_landing_optimization.sh"; then
+    network_tuning_all_report "step=2 failed" "no"
+    return 1
+  fi
+  if ! run_step_script "3" "${PROJECT_ROOT}/maintenance/network/32_dns_purification.sh"; then
+    network_tuning_all_report "step=3 failed" "no"
+    return 1
+  fi
+  if ! run_step_script "4" "${PROJECT_ROOT}/maintenance/network/33_realm_timeout_fix.sh"; then
+    network_tuning_all_report "step=4 failed" "no"
+    return 1
+  fi
+  if ! run_step_script "5" "${PROJECT_ROOT}/maintenance/network/34_ipv6_management.sh"; then
+    network_tuning_all_report "step=5 failed" "no"
+    return 1
+  fi
+
+  network_tuning_all_report "steps=1-5 completed" "yes"
 
   set_state "NETWORK_TUNING_ALL_DONE" "yes"
 }
