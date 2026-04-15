@@ -1932,10 +1932,24 @@ render_nftables_extra_port_lines() {
   done
 }
 
+nftables_expand_port_spec_tokens() {
+  local spec="${1:-}"
+
+  printf '%s\n' "${spec}" \
+    | tr '{},' '   ' \
+    | tr -s '[:space:]' '\n' \
+    | grep -E '^[0-9]+(-[0-9]+)?$' \
+    || true
+}
+
 nftables_list_managed_extra_tcp_ports() {
   local file=""
   local begin_marker=""
   local end_marker=""
+  local line=""
+  local in_block="no"
+  local normalized_line=""
+  local segment=""
 
   file="$(nftables_config_path)"
   begin_marker="$(nftables_extra_ports_begin_marker)"
@@ -1943,15 +1957,80 @@ nftables_list_managed_extra_tcp_ports() {
 
   [[ -f "${file}" ]] || return 0
 
-  awk -v begin_marker="${begin_marker}" -v end_marker="${end_marker}" '
-    index($0, begin_marker) { in_block = 1; next }
-    index($0, end_marker) { in_block = 0; next }
-    in_block {
-      if (match($0, /tcp dport ([0-9]+)/, matched)) {
-        print matched[1]
-      }
-    }
-  ' "${file}" | sort -n | uniq
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    if [[ "${line}" == *"${begin_marker}"* ]]; then
+      in_block="yes"
+      continue
+    fi
+
+    if [[ "${line}" == *"${end_marker}"* ]]; then
+      in_block="no"
+      continue
+    fi
+
+    [[ "${in_block}" == "yes" ]] || continue
+
+    normalized_line="$(printf '%s\n' "${line}" | tr -s '[:space:]' ' ')"
+    normalized_line="${normalized_line# }"
+    [[ "${normalized_line}" == *"tcp dport "* ]] || continue
+
+    segment="${normalized_line%% accept*}"
+    segment="${segment#*tcp dport }"
+    nftables_expand_port_spec_tokens "${segment}"
+  done <"${file}" | sort -u
+}
+
+nftables_runtime_input_chain_lines() {
+  local line=""
+  local in_input_chain="no"
+
+  command_exists nft || return 0
+
+  while IFS= read -r line; do
+    if [[ "${in_input_chain}" == "yes" ]]; then
+      if [[ "${line}" =~ ^[[:space:]]*} ]]; then
+        in_input_chain="no"
+        continue
+      fi
+
+      printf '%s\n' "${line}"
+      continue
+    fi
+
+    if [[ "${line}" =~ chain[[:space:]]+input[[:space:]]*\{ ]]; then
+      in_input_chain="yes"
+    fi
+  done < <(nft list ruleset 2>/dev/null || true)
+}
+
+nftables_runtime_allowed_ports_by_proto() {
+  local proto="${1:-}"
+  local line=""
+  local normalized_line=""
+  local segment=""
+
+  [[ "${proto}" == "tcp" || "${proto}" == "udp" ]] || return 0
+
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] || continue
+
+    normalized_line="$(printf '%s\n' "${line}" | tr -s '[:space:]' ' ')"
+    normalized_line="${normalized_line# }"
+    [[ "${normalized_line}" == *"${proto} dport "* ]] || continue
+    [[ "${normalized_line}" == *" accept"* ]] || continue
+
+    segment="${normalized_line%% accept*}"
+    segment="${segment#*${proto} dport }"
+    nftables_expand_port_spec_tokens "${segment}"
+  done < <(nftables_runtime_input_chain_lines) | sort -u
+}
+
+nftables_runtime_allowed_tcp_ports() {
+  nftables_runtime_allowed_ports_by_proto "tcp"
+}
+
+nftables_runtime_allowed_udp_ports() {
+  nftables_runtime_allowed_ports_by_proto "udp"
 }
 
 nftables_ensure_extra_ports_block() {

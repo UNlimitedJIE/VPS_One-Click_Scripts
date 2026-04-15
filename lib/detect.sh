@@ -133,3 +133,77 @@ listening_tcp_ports() {
     }
   ' | sort -n | uniq
 }
+
+listening_socket_process_label() {
+  local process_field="${1:-}"
+  local process_name=""
+  local process_pid=""
+
+  if [[ -z "${process_field}" || "${process_field}" == "-" ]]; then
+    printf '%s\n' "unknown"
+    return 0
+  fi
+
+  process_name="$(printf '%s\n' "${process_field}" | sed -n 's/^[^"]*"\([^"]*\)".*/\1/p')"
+  process_pid="$(printf '%s\n' "${process_field}" | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p')"
+
+  case "${process_name}" in
+    systemd-resolve)
+      process_name="systemd-resolved"
+      ;;
+  esac
+
+  if [[ -n "${process_name}" && -n "${process_pid}" ]]; then
+    printf '%s (pid=%s)\n' "${process_name}" "${process_pid}"
+    return 0
+  fi
+
+  if [[ -n "${process_name}" ]]; then
+    printf '%s\n' "${process_name}"
+    return 0
+  fi
+
+  if [[ -n "${process_pid}" ]]; then
+    printf 'pid=%s\n' "${process_pid}"
+    return 0
+  fi
+
+  printf '%s\n' "unknown"
+}
+
+listening_socket_details() {
+  local line=""
+  local proto=""
+  local state=""
+  local recv_q=""
+  local send_q=""
+  local local_socket=""
+  local peer_socket=""
+  local process_field=""
+  local extra_field=""
+  local process_label=""
+  local port_sort_key=""
+
+  command_exists ss || return 0
+
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] || continue
+
+    proto=""
+    state=""
+    recv_q=""
+    send_q=""
+    local_socket=""
+    peer_socket=""
+    process_field=""
+    extra_field=""
+    read -r proto state recv_q send_q local_socket peer_socket process_field extra_field <<<"${line}"
+
+    [[ -n "${proto}" && -n "${local_socket}" ]] || continue
+    process_label="$(listening_socket_process_label "${process_field:-}")"
+    port_sort_key="${local_socket##*:}"
+    [[ "${port_sort_key}" =~ ^[0-9]+$ ]] || port_sort_key="0"
+
+    printf '%05d\t%s %s -> %s\n' "${port_sort_key}" "${proto}" "${local_socket}" "${process_label}"
+  done < <(ss -lntupH 2>/dev/null || true) | sort -n | cut -f2-
+}
