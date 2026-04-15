@@ -182,6 +182,33 @@ ui_confirm_with_back() {
   [[ "$(ui_trim_value "${UI_LAST_INPUT}")" == "yes" ]]
 }
 
+ui_confirm_enter_or_zero() {
+  local title="$1"
+  local body="$2"
+
+  UI_LAST_INPUT=""
+  export UI_LAST_INPUT
+
+  if ui_use_whiptail; then
+    local result=""
+    result="$(
+      whiptail \
+        --title "${title}" \
+        --inputbox "${body}\n\n直接回车继续\n输入 0 取消" 22 100 "" \
+        3>&1 1>&2 2>&3
+    )" || return 1
+    [[ "$(ui_trim_value "${result}")" != "0" ]]
+    return $?
+  fi
+
+  ui_require_interactive || return 1
+
+  ui_print_raw "\n${title}\n${body}\n按回车继续，输入 0 取消："
+  ui_flush_output || true
+  ui_read_line || return 1
+  [[ "$(ui_trim_value "${UI_LAST_INPUT}")" != "0" ]]
+}
+
 ui_prompt_input() {
   local title="$1"
   local prompt="$2"
@@ -258,7 +285,9 @@ ui_choose_phase() {
     ui_print_raw $'1. 初始化菜单\n'
     ui_print_raw $'   进入初始化菜单，按数字执行各阶段。\n'
     ui_print_raw $'2. 长期维护菜单\n'
-    ui_print_raw $'   进入长期维护菜单，可继续进入端口管理和谨慎操作子菜单。\n'
+    ui_print_raw $'   进入长期维护菜单，处理更新、巡检、端口管理等日常维护。\n'
+    ui_print_raw $'3. 网络调优\n'
+    ui_print_raw $'   进入 3.1 到 3.7 的网络调优子菜单。\n'
     ui_print_raw $'0. 退出程序\n\n'
     ui_print_raw "请输入编号："
     ui_read_line || return 1
@@ -279,11 +308,16 @@ ui_choose_phase() {
         export UI_LAST_INPUT
         return 0
         ;;
+      3|network)
+        UI_LAST_INPUT="network"
+        export UI_LAST_INPUT
+        return 0
+        ;;
       "")
-        ui_warn_message "输入为空" "请输入 1、2 或 0。默认流程 ${default_phase} 仅作提示，不会自动代选。"
+        ui_warn_message "输入为空" "请输入 1、2、3 或 0。默认流程 ${default_phase} 仅作提示，不会自动代选。"
         ;;
       *)
-        ui_warn_message "输入无效" "根菜单只支持输入 1、2 或 0。"
+        ui_warn_message "输入无效" "根菜单只支持输入 1、2、3 或 0。"
         ;;
     esac
   done

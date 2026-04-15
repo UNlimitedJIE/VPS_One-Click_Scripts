@@ -152,50 +152,177 @@ fail2ban_single_line() {
   printf '%s' "${value}" | tr '\n' ';' | sed -E 's/[[:space:]]*;[[:space:]]*/; /g; s/[[:space:]]+/ /g; s/; $//'
 }
 
+FAIL2BAN_LAST_OUTPUT=""
+
+fail2ban_run_capture() {
+  FAIL2BAN_LAST_OUTPUT=""
+  if FAIL2BAN_LAST_OUTPUT="$("$@" 2>&1)"; then
+    return 0
+  fi
+  return 1
+}
+
 fail2ban_collect_diagnostics() {
   local output=""
+  local diag_output=""
 
-  if command_exists journalctl; then
-    output="$(journalctl -u fail2ban -n 50 --no-pager 2>&1 || true)"
-    [[ -n "${output}" ]] && printf '%s\n' "${output}"
+  output="$(systemctl status fail2ban --no-pager -l 2>&1 || true)"
+  if [[ -n "${output}" ]]; then
+    diag_output+=$'--- systemctl status fail2ban --no-pager -l ---\n'
+    diag_output+="${output}"
+    diag_output+=$'\n'
   fi
 
-  output="$(systemctl status --no-pager fail2ban 2>&1 || true)"
-  [[ -n "${output}" ]] && printf '%s\n' "${output}"
+  if command_exists journalctl; then
+    output="$(journalctl -u fail2ban -n 100 --no-pager 2>&1 || true)"
+    if [[ -n "${output}" ]]; then
+      diag_output+=$'--- journalctl -u fail2ban -n 100 --no-pager ---\n'
+      diag_output+="${output}"
+      diag_output+=$'\n'
+    fi
+  fi
+
+  if command_exists fail2ban-client; then
+    if output="$(fail2ban-client -t 2>&1 || true)"; then
+      :
+    fi
+    if [[ -n "${output}" ]]; then
+      diag_output+=$'--- fail2ban-client -t ---\n'
+      diag_output+="${output}"
+      diag_output+=$'\n'
+    else
+      output="$(fail2ban-client -d 2>&1 || true)"
+      if [[ -n "${output}" ]]; then
+        diag_output+=$'--- fail2ban-client -d ---\n'
+        diag_output+="${output}"
+        diag_output+=$'\n'
+      fi
+    fi
+  fi
+
+  printf '%s' "${diag_output}"
 }
 
 fail2ban_failure_reason() {
-  local text="${1:-}"
+  local context="${1:-unknown}"
+  local text="${2:-}"
+
+  if [[ "${text}" =~ Failed[[:space:]]during[[:space:]]configuration ]] || \
+     [[ "${text}" =~ While[[:space:]]reading[[:space:]]from ]] || \
+     [[ "${text}" =~ File[[:space:]]contains[[:space:]]parsing[[:space:]]errors ]] || \
+     [[ "${text}" =~ No[[:space:]]section: ]] || \
+     [[ "${text}" =~ No[[:space:]]option[[:space:]] ]] || \
+     [[ "${text}" =~ bad[[:space:]]value[[:space:]]substitution ]] || \
+     [[ "${text}" =~ InterpolationError ]] || \
+     [[ "${text}" =~ Wrong[[:space:]]value ]] || \
+     [[ "${text}" =~ syntax[[:space:]]error ]]; then
+    printf '%s\n' "config syntax / jail config error"
+    return 0
+  fi
 
   if [[ "${text}" =~ Have[[:space:]]not[[:space:]]found[[:space:]]any[[:space:]]log[[:space:]]file[[:space:]]for[[:space:]]sshd[[:space:]]jail ]] || \
-     [[ "${text}" =~ journalmatch ]] || \
+     [[ "${text}" =~ Invalid[[:space:]]journalmatch ]] || \
+     [[ "${text}" =~ Failed[[:space:]]to[[:space:]]access[[:space:]]journal ]] || \
      [[ "${text}" =~ No[[:space:]]file\(s\)[[:space:]]found[[:space:]]for[[:space:]]glob ]]; then
-    printf '%s\n' "日志来源问题"
+    printf '%s\n' "journalmatch / log source error"
     return 0
   fi
 
-  if [[ "${text}" =~ banaction ]] || \
-     [[ "${text}" =~ iptables ]] || \
-     [[ "${text}" =~ nftables ]] || \
-     [[ "${text}" =~ backend ]] || \
-     [[ "${text}" =~ Definition ]] || \
-     [[ "${text}" =~ actionban ]] || \
-     [[ "${text}" =~ actionstart ]]; then
-    printf '%s\n' "banaction/backend 问题"
+  if [[ "${text}" =~ Unknown[[:space:]]backend ]] || \
+     [[ "${text}" =~ Unable[[:space:]]to[[:space:]]find[[:space:]]a[[:space:]]corresponding[[:space:]]action ]] || \
+     [[ "${text}" =~ No[[:space:]]such[[:space:]]file[[:space:]]or[[:space:]]directory.*action\.d ]] || \
+     [[ "${text}" =~ Failed[[:space:]]to[[:space:]]execute[[:space:]].*(iptables|nftables) ]] || \
+     [[ "${text}" =~ ERROR.*(banaction|backend|iptables|nftables) ]]; then
+    printf '%s\n' "banaction / backend error"
     return 0
   fi
 
-  printf '%s\n' "无法自动判定的 fail2ban 配置问题"
+  if [[ "${context}" == "startup-timeout" ]] || \
+     [[ "${text}" =~ Server[[:space:]]ready ]] || \
+     [[ "${text}" =~ Failed[[:space:]]to[[:space:]]start[[:space:]]Fail2Ban[[:space:]]Service ]] || \
+     [[ "${text}" =~ Connection[[:space:]]refused ]] || \
+     [[ "${text}" =~ No[[:space:]]such[[:space:]]file[[:space:]]or[[:space:]]directory ]] || \
+     [[ "${text}" =~ Could[[:space:]]not[[:space:]]find[[:space:]]server ]] || \
+     [[ "${text}" =~ Is[[:space:]]the[[:space:]]server[[:space:]]running ]] || \
+     [[ "${text}" =~ activating ]] || \
+     [[ "${text}" =~ startup ]]; then
+    printf '%s\n' "startup timeout / service not ready"
+    return 0
+  fi
+
+  printf '%s\n' "unclassified fail2ban startup error"
 }
 
-fail2ban_require_success() {
+fail2ban_failure_suggestion() {
+  local classification="${1:-}"
+
+  case "${classification}" in
+    "config syntax / jail config error")
+      printf '%s\n' "检查 /etc/fail2ban/jail.d/sshd.local 与 fail2ban-client -t 输出中的具体键名或格式错误。"
+      ;;
+    "journalmatch / log source error")
+      printf '%s\n' "检查 ssh.service/sshd.service 的实际 unit 名称，以及 journalctl 中是否存在 sshd 记录。"
+      ;;
+    "banaction / backend error")
+      printf '%s\n' "检查 fail2ban 的 nftables/iptables action 文件是否存在，并确认当前防火墙后端与 banaction 匹配。"
+      ;;
+    "startup timeout / service not ready")
+      printf '%s\n' "服务在重启后未在超时内 ready；先复查 systemctl status fail2ban 与 journalctl -u fail2ban 的最近启动日志。"
+      ;;
+    *)
+      printf '%s\n' "查看 systemctl status fail2ban、journalctl -u fail2ban 和 fail2ban-client -t 的完整输出定位问题。"
+      ;;
+  esac
+}
+
+fail2ban_extract_key_lines() {
+  local text="${1:-}"
+
+  printf '%s\n' "${text}" | awk '
+    /Failed during configuration|Have not found any log file|No file\(s\) found for glob|Invalid journalmatch|Failed to access journal|Unknown backend|Unable to find a corresponding action|Failed to execute.*(iptables|nftables)|Failed to start|Main process exited|Connection refused|No such file or directory|Is the server running|ERROR|status=/ {
+      gsub(/^[[:space:]]+/, "", $0)
+      if (!seen[$0]++) {
+        print
+        count++
+        if (count == 2) {
+          exit
+        }
+      }
+    }
+  '
+}
+
+fail2ban_report_failure() {
+  local context="$1"
+  local failure_prefix="$2"
+  local command_output="${3:-}"
+  local diagnostics=""
+  local classification=""
+  local summary_lines=""
+  local suggestion=""
+  local line=""
+
+  diagnostics="$(fail2ban_collect_diagnostics)"
+  classification="$(fail2ban_failure_reason "${context}" "${command_output}"$'\n'"${diagnostics}")"
+  summary_lines="$(fail2ban_extract_key_lines "${command_output}"$'\n'"${diagnostics}")"
+  suggestion="$(fail2ban_failure_suggestion "${classification}")"
+
+  log warn "fail2ban failure classification: ${classification}"
+  if [[ -n "${summary_lines}" ]]; then
+    while IFS= read -r line; do
+      [[ -n "${line}" ]] || continue
+      log warn "diagnostic summary: $(fail2ban_single_line "${line}")"
+    done <<< "${summary_lines}"
+  fi
+  log warn "next step: ${suggestion}"
+
+  die "${failure_prefix}。classification=${classification}；backend=${FAIL2BAN_BACKEND:-<unset>}；journalmatch=${FAIL2BAN_SSHD_JOURNALMATCH:-<unset>}；banaction=${FAIL2BAN_BANACTION:-<unset>}。"
+}
+
+fail2ban_run_checked_command() {
   local description="$1"
   local failure_prefix="$2"
   shift 2
-
-  local output=""
-  local combined=""
-  local reason=""
 
   log info "${description}"
 
@@ -204,16 +331,34 @@ fail2ban_require_success() {
     return 0
   fi
 
-  if output="$("$@" 2>&1)"; then
-    [[ -n "${output}" ]] && log info "$(fail2ban_single_line "${output}")"
+  if fail2ban_run_capture "$@"; then
+    [[ -n "${FAIL2BAN_LAST_OUTPUT}" ]] && log info "$(fail2ban_single_line "${FAIL2BAN_LAST_OUTPUT}")"
     return 0
   fi
 
-  combined="${output}"
-  combined+=$'\n'
-  combined+="$(fail2ban_collect_diagnostics)"
-  reason="$(fail2ban_failure_reason "${combined}")"
-  die "${failure_prefix}（${reason}）。backend=$(fail2ban_jail_backend)；journalmatch=${FAIL2BAN_SSHD_JOURNALMATCH:-<unset>}；banaction=${FAIL2BAN_BANACTION:-<unset>}。"
+  fail2ban_report_failure "command" "${failure_prefix}" "${FAIL2BAN_LAST_OUTPUT}"
+}
+
+fail2ban_wait_for_ready() {
+  local timeout_seconds="${1:-15}"
+  local attempt=1
+
+  log info "Waiting for fail2ban ready (timeout=${timeout_seconds}s)"
+
+  while (( attempt <= timeout_seconds )); do
+    if fail2ban_run_capture fail2ban-client ping; then
+      [[ -n "${FAIL2BAN_LAST_OUTPUT}" ]] && log info "fail2ban ping: $(fail2ban_single_line "${FAIL2BAN_LAST_OUTPUT}")"
+      return 0
+    fi
+
+    log info "fail2ban not ready yet (${attempt}/${timeout_seconds})"
+    if (( attempt < timeout_seconds )); then
+      sleep 1
+    fi
+    attempt=$((attempt + 1))
+  done
+
+  fail2ban_report_failure "startup-timeout" "fail2ban-client ping failed after waiting for readiness" "${FAIL2BAN_LAST_OUTPUT}"
 }
 
 fail2ban_log_summary() {
@@ -229,12 +374,12 @@ fail2ban_log_summary() {
   service_state="$(systemctl is-active fail2ban 2>/dev/null || true)"
   [[ -n "${service_state}" ]] || service_state="unknown"
 
-  log info "fail2ban 服务状态: ${service_state}"
-  log info "sshd jail 加载成功: yes"
+  log info "fail2ban service status: ${service_state}"
+  log info "sshd jail loaded = yes"
   log info "backend: ${backend}"
   log info "journalmatch: ${journalmatch}"
   log info "banaction: ${banaction}"
-  log info "监控端口: ${port}"
+  log info "monitored port: ${port}"
   log info "maxretry: ${maxretry}"
   log info "findtime: ${findtime}"
   log info "bantime: ${bantime}"
@@ -272,9 +417,10 @@ main() {
   findtime="$(fail2ban_jail_findtime)"
   bantime="$(fail2ban_jail_bantime)"
 
+  FAIL2BAN_BACKEND="${backend}"
   FAIL2BAN_SSHD_JOURNALMATCH="${journalmatch}"
   FAIL2BAN_BANACTION="${banaction}"
-  export FAIL2BAN_SSHD_JOURNALMATCH FAIL2BAN_BANACTION
+  export FAIL2BAN_BACKEND FAIL2BAN_SSHD_JOURNALMATCH FAIL2BAN_BANACTION
 
   jail_file="/etc/fail2ban/jail.d/sshd.local"
   content="$(fail2ban_render_sshd_local "${backend}" "${journalmatch}" "${banaction}" "${port}" "${maxretry}" "${findtime}" "${bantime}")"
@@ -283,18 +429,18 @@ main() {
   run_cmd "Enabling service fail2ban" systemctl enable fail2ban
 
   if command_exists fail2ban-client && is_false "${PLAN_ONLY}" && is_false "${DRY_RUN}"; then
-    fail2ban_require_success "Checking fail2ban config" "fail2ban-client -d failed" fail2ban-client -d
-    fail2ban_require_success "Restarting fail2ban service" "systemctl restart fail2ban failed" systemctl restart fail2ban
-    fail2ban_require_success "Checking fail2ban ping" "fail2ban-client ping failed" fail2ban-client ping
-    fail2ban_require_success "Checking fail2ban global status" "fail2ban-client status failed" fail2ban-client status
-    fail2ban_require_success "Checking fail2ban sshd jail status" "fail2ban-client status sshd failed" fail2ban-client status sshd
+    fail2ban_run_checked_command "Checking fail2ban config" "fail2ban-client -d failed" fail2ban-client -d
+    fail2ban_run_checked_command "Restarting fail2ban service" "systemctl restart fail2ban failed" systemctl restart fail2ban
+    fail2ban_wait_for_ready 15
+    fail2ban_run_checked_command "Checking fail2ban global status" "fail2ban-client status failed" fail2ban-client status
+    fail2ban_run_checked_command "Checking fail2ban sshd jail status" "fail2ban-client status sshd failed" fail2ban-client status sshd
     fail2ban_log_summary "${backend}" "${journalmatch}" "${banaction}" "${port}" "${maxretry}" "${findtime}" "${bantime}"
   else
     if is_true "${PLAN_ONLY}" || is_true "${DRY_RUN}"; then
       log info "backend: ${backend}"
       log info "journalmatch: ${journalmatch}"
       log info "banaction: ${banaction}"
-      log info "监控端口: ${port}"
+      log info "monitored port: ${port}"
       log info "maxretry: ${maxretry}"
       log info "findtime: ${findtime}"
       log info "bantime: ${bantime}"

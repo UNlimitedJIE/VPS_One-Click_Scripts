@@ -82,37 +82,13 @@ single_line_ssh_public_key_is_valid() {
   [[ "${key_count}" -gt 0 ]]
 }
 
-prompt_plain_yes_no() {
-  local title="$1"
-  local body="$2"
-  local answer=""
-
-  while true; do
-    ui_print_raw "\n${title}\n${body}\n请输入 yes 或 no："
-    ui_flush_output || true
-    ui_read_line || return 1
-    answer="$(ui_trim_value "${UI_LAST_INPUT}")"
-    case "${answer}" in
-      yes|YES|y|Y)
-        return 0
-        ;;
-      no|NO|n|N|0|"")
-        return 1
-        ;;
-      *)
-        ui_warn_message "输入无效" "请输入 yes 或 no。"
-        ;;
-    esac
-  done
-}
-
 show_source_write_result_and_wait() {
   local source_file="$1"
   local key_count="$2"
 
   ui_show_plain_and_wait \
     "第 4.4 段 公钥源文件写入结果" \
-    "已接收公钥。\n已写入源文件：${source_file}\n源文件有效公钥数量：${key_count}" \
+    "已接收公钥，已写入源文件。\n源文件：${source_file}\n有效公钥数量：${key_count}" \
     "按回车继续安装到目标账户："
 }
 
@@ -123,8 +99,22 @@ show_target_install_result_and_wait() {
 
   ui_show_plain_and_wait \
     "第 4.4 段 目标账户 authorized_keys 安装结果" \
-    "源文件路径：${source_file}\n目标文件路径：${auth_file}\n目标文件安装结果：success\n有效公钥数量：${key_count}" \
+    "已安装到目标账户 authorized_keys。\n源文件：${source_file}\n目标文件：${auth_file}\n有效公钥数量：${key_count}" \
     "按回车继续："
+}
+
+confirm_existing_authorized_keys_source_install() {
+  local source_file="$1"
+  local auth_file="$2"
+
+  if is_true "${PLAN_ONLY:-false}" || is_true "${DRY_RUN:-false}"; then
+    log info "[plan] detected valid authorized_keys source: ${source_file}"
+    return 0
+  fi
+
+  ui_confirm_enter_or_zero \
+    "第 4.4 段 安装 SSH 公钥" \
+    "已检测到可用公钥源文件。\n当前目标用户：${ADMIN_USER}\n当前目标文件：${auth_file}\n当前源文件：${source_file}\n将把这个公钥安装到目标账户。"
 }
 
 capture_authorized_keys_source_via_paste() {
@@ -146,26 +136,17 @@ capture_authorized_keys_source_via_paste() {
 
   ui_require_interactive || die "当前公钥源文件无效，且当前不是交互式终端，无法现场粘贴 SSH 公钥。请先写入 ${source_file}。"
 
-  if ! prompt_plain_yes_no \
-    "第 4.4 段 SSH 公钥源未就绪" \
-    "$(authorized_keys_source_status_message "${source_file}")
-
+  while true; do
+    if ! ui_prompt_input \
+      "第 4.4 段 粘贴 SSH 公钥" \
+      "$(authorized_keys_source_status_message "${source_file}")
 当前目标用户：${ADMIN_USER}
 当前目标文件：${auth_file}
 当前源文件：${source_file}
-
-是否现在进入现场粘贴 SSH 公钥？"; then
-    return 1
-  fi
-
-  while true; do
-    UI_LAST_INPUT=""
-    export UI_LAST_INPUT
-
-    ui_print_raw "\n第 4.4 段 现场粘贴 SSH 公钥\n当前目标用户：${ADMIN_USER}\n当前目标文件：${auth_file}\n当前源文件：${source_file}\n现在正在等待你粘贴一整行 SSH 公钥，粘贴后按回车。\n输入 0 取消。\n请输入："
-    ui_flush_output || true
-    ui_read_line || return 1
-
+现在正在等待你粘贴一整行 SSH 公钥，粘贴后按回车。
+输入 0 取消"; then
+      return 1
+    fi
     pasted_key="$(ui_trim_value "${UI_LAST_INPUT}")"
     case "${pasted_key}" in
       0)
@@ -298,6 +279,10 @@ main() {
 
   if resolve_authorized_keys_source; then
     source_file="${_AUTHORIZED_KEYS_RESOLVED_SOURCE_FILE}"
+  fi
+
+  if [[ -n "${source_file}" ]]; then
+    confirm_existing_authorized_keys_source_install "${source_file}" "${auth_file}" || return 0
   fi
 
   if [[ -z "${source_file}" ]]; then

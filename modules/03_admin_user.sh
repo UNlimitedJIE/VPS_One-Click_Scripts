@@ -78,7 +78,7 @@ capture_admin_sudo_mode() {
   while true; do
     if ! ui_prompt_input \
       "第 4.2 段 配置 sudo 行为" \
-      "请输入 sudo 模式：\n- nopasswd = sudo 不需要密码\n- password = sudo 需要密码\n\n说明：这里仅影响 sudo，不影响 SSH 公钥登录，也不会单独打开 SSH 密码登录。" \
+      "当前正在设置：sudo 是否需要密码\n- nopasswd = sudo 不需要密码\n- password = sudo 需要密码\n这里只影响 sudo，不影响 SSH 登录方式。" \
       "${default_mode}"; then
       die "无法读取 sudo 模式选择，请在交互式终端中执行。"
     fi
@@ -106,7 +106,7 @@ confirm_admin_sudo_separate_password_fallback() {
   while true; do
     if ! ui_prompt_input \
       "第 4.2 段 sudo 密码限制说明" \
-      "当前系统做不到真正独立的 sudo 密码。\n\n如果继续：\n- sudo 仍然只能使用 ${ADMIN_USER} 的账户密码\n- 下一步你可以 keep 当前账户密码，或 set 一个新的账户密码\n- 无论 keep 还是 set，sudo 都会使用这个账户密码\n\n输入 yes 接受这个限制并继续；输入 0 返回重新选择：" \
+      "当前实现不支持独立 sudo 密码。\n如果继续，sudo 仍使用 ${ADMIN_USER} 的账户密码。\n输入 yes 继续，输入 0 返回。" \
       "yes"; then
       die "无法读取 sudo 密码限制确认，请在交互式终端中执行。"
     fi
@@ -133,7 +133,7 @@ capture_admin_sudo_password_source() {
   while true; do
     if ! ui_prompt_input \
       "第 4.2 段 sudo 密码来源" \
-      "当前选择：sudo 需要密码。\n\n请输入：\n- shared = sudo 使用该用户的账户密码\n- separate = 我想单独设置 sudo 密码\n- 0 = 返回\n\n说明：SSH 登录认证是另一件事；这里不会把 sudo 密码自动当成 SSH 登录密码，也不会单独开启 SSH 密码登录。" \
+      "当前正在设置：sudo 用哪个密码\n- shared = sudo 使用 ${ADMIN_USER} 的账户密码\n- separate = 想单独设置 sudo 密码\n- 0 = 返回\n当前实现不支持独立 sudo 密码；若选 separate，后面仍会回到使用账户密码。" \
       "${default_value}"; then
       die "无法读取 sudo 密码来源，请在交互式终端中执行。"
     fi
@@ -203,7 +203,7 @@ confirm_account_password_lock_risk() {
   while true; do
     if ! ui_prompt_input \
       "第 4.3 段 锁定账户密码风险确认" \
-      "当前目标用户 authorized_keys 还没有安装成功。\n\n如果你现在锁账户密码，而 SSH 公钥又未安装成功，该用户将无法通过密码登录。\n\n输入 yes 继续锁定；输入 0 返回重新选择：" \
+      "当前 authorized_keys 还没安装成功。\n如果现在锁账户密码，这个账户之后就不能再用密码认证。\n输入 yes 继续锁定，输入 0 返回。" \
       "0"; then
       return 1
     fi
@@ -262,7 +262,7 @@ capture_admin_account_password_behavior() {
   while true; do
     if ! ui_prompt_input \
       "第 4.3 段 配置账户密码" \
-      "当前账户密码状态：${current_state_label}\n\n说明：\n- 账户密码影响本地/密码类认证\n- 账户密码不影响 SSH 公钥登录\n- sudo 是否需要密码是另一件事\n- 若上一步选择了 sudo=password，当前实现下 sudo 实际使用的也是该账户密码\n\n请输入：\n- keep = keep current\n- set = set password\n- lock = no local password / lock password\n- 0 = 返回" \
+      "当前正在设置：管理用户 ${ADMIN_USER} 的账户密码状态\n当前状态：${current_state_label}\n- keep = 保持当前账户密码状态不变\n- set = 现在设置/更新账户密码\n- lock = 锁定账户密码，之后不能再用密码认证该账户\n- 0 = 返回\n若上一步选择了 sudo=password，则 sudo 也会使用这个账户密码。" \
       "${default_value}"; then
       die "无法读取账户密码行为，请在交互式终端中执行。"
     fi
@@ -289,7 +289,7 @@ capture_admin_account_password_behavior() {
         ;;
       lock|locked|unset)
         if [[ "${_ADMIN_SUDO_MODE_SELECTED}" == "password" ]]; then
-          ui_warn_message "当前组合无效" "sudo password 模式使用该账户密码，因此不能同时选择 no local password / lock password。"
+          ui_warn_message "当前组合无效" "当前 sudo 需要密码，所以这个账户必须保留可用密码，不能选择 lock。"
           continue
         fi
         if ! admin_authorized_keys_ready_for_user "${ADMIN_USER}"; then

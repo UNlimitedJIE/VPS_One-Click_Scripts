@@ -167,7 +167,6 @@ set_default_config() {
   BASE_PACKAGES="${BASE_PACKAGES:-curl ca-certificates sudo openssh-server nftables rsync unzip git jq lsof procps htop vim-tiny less}"
   JOURNAL_VACUUM_DAYS="${JOURNAL_VACUUM_DAYS:-14}"
   CLEANUP_APT_CACHE="${CLEANUP_APT_CACHE:-true}"
-  SAFE_TUNING_PROFILE="${SAFE_TUNING_PROFILE:-none}"
   MODULE_REGISTRY_FILE="${MODULE_REGISTRY_FILE:-${PROJECT_ROOT}/config/module-registry.tsv}"
   STATE_DIR="${STATE_DIR:-$(shared_state_dir_path)}"
   LOG_DIR="${LOG_DIR:-$(shared_log_dir_path)}"
@@ -276,7 +275,7 @@ export_config() {
   export INSTALL_FAIL2BAN INSTALL_UNATTENDED_UPGRADES
   export ENABLE_NODEQUALITY NODEQUALITY_FORCE ENABLE_NFTABLES ENABLE_TIME_SYNC
   export PLAN_ONLY DRY_RUN BASE_PACKAGES JOURNAL_VACUUM_DAYS
-  export CLEANUP_APT_CACHE SAFE_TUNING_PROFILE SNAPSHOT_REMINDER
+  export CLEANUP_APT_CACHE SNAPSHOT_REMINDER
 }
 
 init_runtime() {
@@ -1070,6 +1069,27 @@ module_completion_state_found() {
     20_update_system)
       [[ -n "$(get_state "MAINT_LAST_UPDATE" || true)" ]]
       ;;
+    30_xanmod_bbr3)
+      [[ -n "$(get_state "NETWORK_XANMOD_KERNEL_DONE" || true)" ]]
+      ;;
+    31_bbr_landing_optimization)
+      [[ -n "$(get_state "NETWORK_BBR_TUNED" || true)" ]]
+      ;;
+    32_dns_purification)
+      [[ -n "$(get_state "NETWORK_DNS_PURIFIED" || true)" ]]
+      ;;
+    33_realm_timeout_fix)
+      [[ -n "$(get_state "NETWORK_REALM_TIMEOUT_FIXED" || true)" ]]
+      ;;
+    34_ipv6_management)
+      [[ -n "$(get_state "NETWORK_IPV6_MANAGED" || true)" ]]
+      ;;
+    35_network_tuning_all)
+      [[ -n "$(get_state "NETWORK_TUNING_ALL_DONE" || true)" ]]
+      ;;
+    36_network_tuning_status)
+      [[ -n "$(get_state "NETWORK_TUNING_STATUS_REVIEWED" || true)" ]]
+      ;;
     *)
       return 1
       ;;
@@ -1236,6 +1256,45 @@ maintain_update_prerequisite_conditions_satisfied() {
   return 0
 }
 
+network_xanmod_prerequisite_conditions_satisfied() {
+  detect_system_prerequisite_conditions_satisfied || return 1
+  command_exists apt-get || return 1
+  command_exists dpkg || return 1
+  command_exists gpg || return 1
+  command_exists wget || return 1
+  return 0
+}
+
+network_bbr_prerequisite_conditions_satisfied() {
+  network_tuning_kernel_supports_bbr || return 1
+  [[ -f "$(network_tuning_bbr_sysctl_file)" ]] || return 1
+  return 0
+}
+
+network_dns_prerequisite_conditions_satisfied() {
+  [[ -f "$(network_tuning_dns_dropin_path)" ]] || return 1
+  [[ "$(network_tuning_dns_mode_label)" != "未启用" ]]
+}
+
+network_realm_prerequisite_conditions_satisfied() {
+  local service_name=""
+  local config_path=""
+
+  service_name="$(network_tuning_realm_service_name || true)"
+  config_path="$(network_tuning_realm_config_path || true)"
+  [[ -n "${config_path}" && -f "${config_path}" ]] || return 1
+  [[ -z "${service_name}" || "$(network_tuning_service_state "${service_name}")" == "active" ]]
+}
+
+network_ipv6_prerequisite_conditions_satisfied() {
+  [[ "$(network_tuning_ipv6_state_label)" != "无法判定" ]]
+}
+
+network_status_prerequisite_conditions_satisfied() {
+  command_exists uname || return 1
+  command_exists sysctl || return 1
+}
+
 module_prerequisite_conditions_satisfied() {
   local module_id="${1:-}"
 
@@ -1252,6 +1311,13 @@ module_prerequisite_conditions_satisfied() {
     10_swap) swap_prerequisite_conditions_satisfied ;;
     11_verify) verify_prerequisite_conditions_satisfied ;;
     20_update_system) maintain_update_prerequisite_conditions_satisfied ;;
+    30_xanmod_bbr3) network_xanmod_prerequisite_conditions_satisfied ;;
+    31_bbr_landing_optimization) network_bbr_prerequisite_conditions_satisfied ;;
+    32_dns_purification) network_dns_prerequisite_conditions_satisfied ;;
+    33_realm_timeout_fix) network_realm_prerequisite_conditions_satisfied ;;
+    34_ipv6_management) network_ipv6_prerequisite_conditions_satisfied ;;
+    35_network_tuning_all) network_ipv6_prerequisite_conditions_satisfied ;;
+    36_network_tuning_status) network_status_prerequisite_conditions_satisfied ;;
     *)
       return 1
       ;;
@@ -1431,7 +1497,7 @@ phase_label_zh() {
   case "${1:-}" in
     init) echo "初始化" ;;
     maintain) echo "维护" ;;
-    cautious) echo "谨慎操作" ;;
+    network) echo "网络调优" ;;
     *) echo "未分类" ;;
   esac
 }
@@ -1999,4 +2065,427 @@ apply_sshd_dropin() {
   ssh_service="$(ssh_service_name)"
   reload_service_if_exists "${ssh_service}"
   log info "${description}: ${target}"
+}
+
+network_tuning_state_root() {
+  printf '/var/lib/vps-network-tuning\n'
+}
+
+network_tuning_bbr_sysctl_file() {
+  printf '/etc/sysctl.d/90-vps-network-bbr.conf\n'
+}
+
+network_tuning_fq_service_name() {
+  printf 'vps-network-fq\n'
+}
+
+network_tuning_fq_service_path() {
+  printf '/etc/systemd/system/%s.service\n' "$(network_tuning_fq_service_name)"
+}
+
+network_tuning_fq_script_path() {
+  printf '/usr/local/lib/vps-network-tuning/apply-fq.sh\n'
+}
+
+network_tuning_dns_dropin_path() {
+  printf '/etc/systemd/resolved.conf.d/90-vps-network-dns.conf\n'
+}
+
+network_tuning_ipv6_sysctl_file() {
+  printf '/etc/sysctl.d/90-vps-network-ipv6.conf\n'
+}
+
+network_tuning_current_kernel() {
+  uname -r 2>/dev/null || printf 'unknown\n'
+}
+
+network_tuning_kernel_is_xanmod() {
+  network_tuning_current_kernel | grep -qi 'xanmod'
+}
+
+network_tuning_cpu_flags() {
+  awk -F: '/^flags[[:space:]]*:/ {print $2; exit}' /proc/cpuinfo 2>/dev/null
+}
+
+network_tuning_cpu_has_all_flags() {
+  local flags=""
+  local required=""
+
+  flags=" $(network_tuning_cpu_flags) "
+  for required in "$@"; do
+    [[ "${flags}" == *" ${required} "* ]] || return 1
+  done
+  return 0
+}
+
+network_tuning_xanmod_level() {
+  local arch=""
+
+  arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+  [[ "${arch}" == "amd64" || "${arch}" == "x86_64" ]] || return 1
+
+  if network_tuning_cpu_has_all_flags avx avx2 bmi1 bmi2 f16c fma movbe xsave abm; then
+    printf '%s\n' "x64v3"
+    return 0
+  fi
+
+  printf '%s\n' "x64v2"
+}
+
+network_tuning_xanmod_package_name() {
+  local level=""
+  level="$(network_tuning_xanmod_level)" || return 1
+  printf 'linux-xanmod-%s\n' "${level}"
+}
+
+network_tuning_xanmod_repo_keyring_path() {
+  printf '/etc/apt/keyrings/xanmod-archive-keyring.gpg\n'
+}
+
+network_tuning_xanmod_repo_list_path() {
+  printf '/etc/apt/sources.list.d/xanmod-release.list\n'
+}
+
+network_tuning_distribution_codename() {
+  local codename=""
+
+  codename="$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-}")"
+  if [[ -n "${codename}" ]]; then
+    printf '%s\n' "${codename}"
+    return 0
+  fi
+
+  if command_exists lsb_release; then
+    codename="$(lsb_release -sc 2>/dev/null || true)"
+    [[ -n "${codename}" ]] && printf '%s\n' "${codename}"
+  fi
+}
+
+network_tuning_xanmod_repo_line() {
+  local codename=""
+  codename="$(network_tuning_distribution_codename)"
+  [[ -n "${codename}" ]] || die "Unable to determine distribution codename for XanMod repository."
+  printf 'deb [signed-by=%s] http://deb.xanmod.org %s main\n' "$(network_tuning_xanmod_repo_keyring_path)" "${codename}"
+}
+
+network_tuning_tcp_available_congestion_control() {
+  sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null || cat /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null || printf 'unknown\n'
+}
+
+network_tuning_tcp_congestion_control() {
+  sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || cat /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null || printf 'unknown\n'
+}
+
+network_tuning_default_qdisc() {
+  sysctl -n net.core.default_qdisc 2>/dev/null || cat /proc/sys/net/core/default_qdisc 2>/dev/null || printf 'unknown\n'
+}
+
+network_tuning_sysctl_value() {
+  local key="${1:-}"
+  [[ -n "${key}" ]] || return 1
+  sysctl -n "${key}" 2>/dev/null || printf 'unknown\n'
+}
+
+network_tuning_kernel_supports_bbr() {
+  printf '%s\n' "$(network_tuning_tcp_available_congestion_control)" | grep -qw 'bbr'
+}
+
+network_tuning_kernel_supports_bbr3() {
+  network_tuning_kernel_is_xanmod && network_tuning_kernel_supports_bbr
+}
+
+network_tuning_highest_installed_xanmod_kernel() {
+  local image=""
+
+  for image in /boot/vmlinuz-*xanmod*; do
+    [[ -e "${image}" ]] || continue
+    basename "${image}" | sed 's/^vmlinuz-//'
+  done | sort -V | tail -n 1
+}
+
+network_tuning_reboot_required_for_xanmod() {
+  local installed=""
+  local current=""
+
+  installed="$(network_tuning_highest_installed_xanmod_kernel || true)"
+  current="$(network_tuning_current_kernel)"
+  [[ -n "${installed}" && "${installed}" != "${current}" ]]
+}
+
+network_tuning_default_route_interfaces() {
+  ip route show default 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") print $(i+1)}' | awk 'NF && !seen[$0]++'
+}
+
+network_tuning_tc_qdisc_summary() {
+  tc qdisc show 2>/dev/null || printf 'unavailable\n'
+}
+
+network_tuning_service_state() {
+  local service_name="${1:-}"
+  [[ -n "${service_name}" ]] || return 1
+  systemctl is-active "${service_name}" 2>/dev/null || printf 'unknown\n'
+}
+
+network_tuning_service_enabled_state() {
+  local service_name="${1:-}"
+  [[ -n "${service_name}" ]] || return 1
+  systemctl is-enabled "${service_name}" 2>/dev/null || printf 'unknown\n'
+}
+
+network_tuning_resolved_stack_type() {
+  local resolv_target=""
+
+  if [[ -L /etc/resolv.conf ]]; then
+    resolv_target="$(readlink -f /etc/resolv.conf 2>/dev/null || true)"
+    case "${resolv_target}" in
+      /run/systemd/resolve/*)
+        printf '%s\n' "systemd-resolved"
+        return 0
+        ;;
+      /run/NetworkManager/*|/run/resolvconf/*)
+        printf '%s\n' "external-manager"
+        return 0
+        ;;
+    esac
+  fi
+
+  if service_exists "systemd-resolved" || command_exists resolvectl; then
+    printf '%s\n' "systemd-resolved"
+    return 0
+  fi
+
+  if [[ -f /etc/resolv.conf ]]; then
+    printf '%s\n' "static-resolv.conf"
+    return 0
+  fi
+
+  printf '%s\n' "unknown"
+}
+
+network_tuning_dns_current_servers() {
+  local stack=""
+
+  stack="$(network_tuning_resolved_stack_type)"
+  case "${stack}" in
+    systemd-resolved)
+      if command_exists resolvectl; then
+        resolvectl dns 2>/dev/null | awk '
+          {
+            for (i = 2; i <= NF; i++) {
+              if (!seen[$i]++) {
+                values[count++] = $i
+              }
+            }
+          }
+          END {
+            if (count == 0) {
+              print "unknown"
+            } else {
+              for (i = 0; i < count; i++) {
+                printf "%s%s", values[i], (i + 1 < count ? " " : "\n")
+              }
+            }
+          }
+        '
+        return 0
+      fi
+      ;;
+    static-resolv.conf|external-manager)
+      awk '/^nameserver / {print $2}' /etc/resolv.conf 2>/dev/null | awk '!seen[$0]++' | paste -sd ' ' - || printf 'unknown\n'
+      return 0
+      ;;
+  esac
+
+  printf '%s\n' "unknown"
+}
+
+network_tuning_dns_dot_state() {
+  if [[ -f "$(network_tuning_dns_dropin_path)" ]]; then
+    awk -F= '
+      tolower($1) ~ /^[[:space:]]*dnsovertls[[:space:]]*$/ {
+        value = $2
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        print value
+        found = 1
+        exit
+      }
+      END {
+        if (!found) {
+          print "unknown"
+        }
+      }
+    ' "$(network_tuning_dns_dropin_path)" 2>/dev/null
+    return 0
+  fi
+
+  printf '%s\n' "unknown"
+}
+
+network_tuning_dns_mode_label() {
+  local servers=""
+  local dot_state=""
+
+  servers="$(network_tuning_dns_current_servers)"
+  dot_state="$(network_tuning_dns_dot_state)"
+
+  if [[ -f "$(network_tuning_dns_dropin_path)" ]]; then
+    if printf '%s\n' "${servers}" | grep -Eq '8\.8\.8\.8|1\.1\.1\.1|8\.8\.4\.4|1\.0\.0\.1'; then
+      printf '%s\n' "国外"
+      return 0
+    fi
+    if printf '%s\n' "${servers}" | grep -Eq '223\.5\.5\.5|119\.29\.29\.29|223\.6\.6\.6|182\.254\.116\.116'; then
+      printf '%s\n' "国内"
+      return 0
+    fi
+  fi
+
+  if [[ "${dot_state}" == "yes" || "${dot_state}" == "opportunistic" ]]; then
+    printf '%s\n' "国外"
+    return 0
+  fi
+
+  if [[ "${servers}" == "unknown" ]]; then
+    printf '%s\n' "无法判定"
+    return 0
+  fi
+
+  printf '%s\n' "未启用"
+}
+
+network_tuning_ipv6_disable_all() {
+  network_tuning_sysctl_value net.ipv6.conf.all.disable_ipv6
+}
+
+network_tuning_ipv6_disable_default() {
+  network_tuning_sysctl_value net.ipv6.conf.default.disable_ipv6
+}
+
+network_tuning_ipv6_disable_lo() {
+  network_tuning_sysctl_value net.ipv6.conf.lo.disable_ipv6
+}
+
+network_tuning_ipv6_state_label() {
+  local all_value=""
+  local default_value=""
+  local lo_value=""
+
+  all_value="$(network_tuning_ipv6_disable_all)"
+  default_value="$(network_tuning_ipv6_disable_default)"
+  lo_value="$(network_tuning_ipv6_disable_lo)"
+
+  if [[ -f "$(network_tuning_ipv6_sysctl_file)" ]] && [[ "${all_value}" == "1" && "${default_value}" == "1" ]]; then
+    printf '%s\n' "永久禁用"
+    return 0
+  fi
+
+  if [[ ! -f "$(network_tuning_ipv6_sysctl_file)" ]] && [[ "${all_value}" == "1" || "${default_value}" == "1" || "${lo_value}" == "1" ]]; then
+    printf '%s\n' "临时禁用"
+    return 0
+  fi
+
+  if [[ "${all_value}" == "0" && "${default_value}" == "0" && "${lo_value}" == "0" ]]; then
+    printf '%s\n' "恢复"
+    return 0
+  fi
+
+  printf '%s\n' "无法判定"
+}
+
+network_tuning_realm_service_name() {
+  local unit=""
+
+  if service_exists "realm"; then
+    printf '%s\n' "realm"
+    return 0
+  fi
+
+  unit="$(systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '$1 ~ /^realm(@.*)?\.service$/ {sub(/\.service$/, "", $1); print $1; exit}')"
+  [[ -n "${unit}" ]] && printf '%s\n' "${unit}"
+}
+
+network_tuning_realm_execstart() {
+  local service_name="${1:-}"
+  [[ -n "${service_name}" ]] || service_name="$(network_tuning_realm_service_name || true)"
+  [[ -n "${service_name}" ]] || return 1
+
+  systemctl cat "${service_name}" 2>/dev/null | awk '
+    /^ExecStart=/ {
+      line = $0
+    }
+    END {
+      if (line != "") {
+        print line
+      }
+    }
+  '
+}
+
+network_tuning_realm_config_path() {
+  local execstart=""
+  local path=""
+
+  execstart="$(network_tuning_realm_execstart || true)"
+  path="$(printf '%s\n' "${execstart}" | sed -nE 's/.*(--config|-c)[[:space:]]+([^[:space:]]+).*/\2/p' | tail -n 1)"
+  if [[ -n "${path}" ]]; then
+    printf '%s\n' "${path}"
+    return 0
+  fi
+
+  for path in /etc/realm/config.toml /etc/realm/config.json /opt/realm/config.toml /opt/realm/config.json /root/realm/config.toml /root/realm/config.json; do
+    [[ -f "${path}" ]] && printf '%s\n' "${path}" && return 0
+  done
+
+  return 1
+}
+
+network_tuning_realm_config_format() {
+  local file="${1:-}"
+  [[ -n "${file}" ]] || file="$(network_tuning_realm_config_path || true)"
+
+  case "${file}" in
+    *.toml) printf '%s\n' "toml" ;;
+    *.json) printf '%s\n' "json" ;;
+    *) printf '%s\n' "unknown" ;;
+  esac
+}
+
+network_tuning_snapshot_file() {
+  local file="${1:-}"
+  local snapshot_dir="${2:-}"
+  local encoded_name=""
+
+  [[ -n "${file}" && -n "${snapshot_dir}" ]] || die "network_tuning_snapshot_file requires source file and snapshot dir."
+
+  encoded_name="$(printf '%s' "${file}" | sed 's#/#__#g')"
+  install -d -m 0755 "${snapshot_dir}"
+  if [[ -e "${file}" ]]; then
+    cp -a "${file}" "${snapshot_dir}/${encoded_name}.bak"
+  else
+    : >"${snapshot_dir}/${encoded_name}.absent"
+  fi
+}
+
+network_tuning_restore_file_snapshot() {
+  local file="${1:-}"
+  local snapshot_dir="${2:-}"
+  local encoded_name=""
+  local backup_file=""
+  local absent_file=""
+
+  [[ -n "${file}" && -n "${snapshot_dir}" ]] || die "network_tuning_restore_file_snapshot requires source file and snapshot dir."
+
+  encoded_name="$(printf '%s' "${file}" | sed 's#/#__#g')"
+  backup_file="${snapshot_dir}/${encoded_name}.bak"
+  absent_file="${snapshot_dir}/${encoded_name}.absent"
+
+  if [[ -f "${backup_file}" ]]; then
+    install -d -m 0755 "$(dirname "${file}")"
+    rm -rf "${file}"
+    cp -a "${backup_file}" "${file}"
+    return 0
+  fi
+
+  if [[ -f "${absent_file}" ]]; then
+    rm -f "${file}"
+  fi
 }

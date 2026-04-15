@@ -1,17 +1,13 @@
-# Debian 12 VPS 初始化与维护脚本工程
+# Debian 12 VPS 初始化、维护与网络调优脚本工程
 
-这是一个面向 Debian 12 的模块化 Bash 工程，用于完成两类工作：
+这是一个面向 Debian 12 的模块化 Bash 工程，统一入口为 `bootstrap.sh`，分为三类菜单：
 
-1. 新拿到 VPS 时的初始化
-2. 后续长期维护与审查
+1. 初始化
+2. 长期维护
+3. 网络调优
 
-这一版继续保持模块化结构不变，但把初始化流程收口为 11 步，并把菜单层做了两类增强：
-
-- 初始化流程继续按第 1 步到第 11 步展示和执行
-- 长期维护菜单重构为固定的 1 到 10 结构
-- 第 10 项不再是笼统入口，而是展开为 10.1 到 10.10 的谨慎操作子菜单
-- 根菜单与子菜单的 `0` 行为已统一
-- 原第 12 步 summary 已并入第 11 步验收
+当前版本的初始化流程收口为 11 步；原第 12 步 summary 已并入第 11 步验收。  
+原长期维护中的 `10.x` 谨慎操作入口已删除，改为根菜单独立的 `3. 网络调优` 子菜单。
 
 ## Quick Start
 
@@ -19,7 +15,7 @@
 git clone https://github.com/UNlimitedJIE/VPS_One-Click_Scripts.git
 cd VPS_One-Click_Scripts
 bash bootstrap.sh show init
-bash bootstrap.sh plan init
+bash bootstrap.sh show network
 sudo bash bootstrap.sh init
 ```
 
@@ -29,8 +25,8 @@ sudo bash bootstrap.sh init
 - 模块化：每个功能尽量独立成单脚本
 - 可审查：配置、日志、公共函数、模块职责清晰
 - 幂等：重复执行尽量只做必要改动
-- 安全优先：尤其是 SSH、防火墙和 sysctl 调优，默认避免把自己锁死
-- 支持 `plan` / `dry-run` / `show` / `menu`
+- 安全优先：SSH、防火墙、DNS、内核和网络调优都要求显式确认
+- 支持 `show` / `plan` / `menu` / `dry-run`
 
 ## 目录结构
 
@@ -51,10 +47,12 @@ project-root/
     00_nodequality.sh
     01_detect_system.sh
     02_update_base.sh
+    03_admin_access_stage.sh
     03_admin_user.sh
     04_ssh_keys.sh
     05_ssh_hardening.sh
     06_nftables.sh
+    07_switch_admin_login.sh
     07_time_sync.sh
     08_auto_updates.sh
     09_fail2ban.sh
@@ -68,18 +66,15 @@ project-root/
     24_monitor_basic.sh
     25_cleanup.sh
     26_backup_check.sh
-    27_tuning_entry.sh
     28_change_log.sh
-    cautious/
-      30_ssh_usedns_no.sh
-      31_ssh_ciphers.sh
-      32_icmp_ping_control.sh
-      33_forwarding_switches.sh
-      34_congestion_queue.sh
-      35_tcp_buffers_backlog.sh
-      36_tcp_advanced_features.sh
-      37_kernel_memory_behavior.sh
-      38_status_review.sh
+    network/
+      30_xanmod_bbr3.sh
+      31_bbr_landing_optimization.sh
+      32_dns_purification.sh
+      33_realm_timeout_fix.sh
+      34_ipv6_management.sh
+      35_network_tuning_all.sh
+      36_network_tuning_status.sh
   roles/
     docker.sh
     web.sh
@@ -92,7 +87,7 @@ project-root/
 
 ## 初始化流程总览
 
-初始化阶段会按注册表中的顺序展示并执行：
+初始化阶段按注册表顺序展示和执行：
 
 1. 运行 NodeQuality 基线检测
 2. 检查当前系统和机器基础信息
@@ -106,14 +101,12 @@ project-root/
 10. 显式选择并配置 swap
 11. 验收第 2 到第 10 步的实际结果
 
-其中第 4 步已经合并为一个连续阶段，内部按 4.1 到 4.4 顺序执行：
+其中第 4 步内部固定拆分为：
 
 1. 确认或输入管理用户名
 2. 单独配置 sudo 行为
 3. 单独配置本地账户密码
 4. 配置并强校验 SSH 公钥安装
-
-第 11 步不再只看 state 文件，而是直接检查系统真实状态、配置文件、服务状态和 SSH/登录日志，并输出 `Current / Expected / Evidence / Conclusion`。旧的第 12 步 summary 已删除，其提醒和收口说明已经并入第 11 步。
 
 ## 长期维护主菜单
 
@@ -128,66 +121,62 @@ project-root/
 7. 检查备份与恢复准备情况
 8. 记录本次维护状态
 9. 顺序执行 1 到 8
-10. 谨慎操作入口
 0. 返回上一级菜单
 
 说明：
 
 - `1` 到 `8` 对应实际维护模块
 - `9` 是快捷模式：确认后按顺序执行 `1` 到 `8`
-- `10` 是谨慎操作子菜单
+- 端口管理仍通过长期维护第 `3` 项进入
 
-## 谨慎操作子菜单
+## 网络调优子菜单
 
-进入长期维护第 `10` 项后，会看到这些分点：
+根菜单第 `3` 项为独立的网络调优入口，子菜单固定为：
 
-10.1 保守型 sysctl / 网络调优入口
-10.2 SSH 连接加速：关闭 DNS 反向解析
-10.3 SSH 加密算法配置
-10.4 ICMP / Ping 控制
-10.5 网络转发相关开关
-10.6 拥塞控制与队列调优
-10.7 TCP 缓冲与连接队列参数
-10.8 TCP 高级特性参数
-10.9 内核与内存行为参数
-10.10 查看谨慎操作说明与当前状态
+3.1 安装/更新 XanMod 内核 + BBR v3  
+3.2 BBR 直连/落地优化  
+3.3 DNS 净化  
+3.4 Realm 转发 timeout 修复  
+3.5 IPv6 管理  
+3.6 一键执行 3.1–3.5  
+3.7 查看当前网络调优状态  
 0. 返回上一级菜单
 
 说明：
 
-- `10.1` 复用当前已有的保守调优逻辑
-- `10.2` 到 `10.9` 属于可能修改系统的谨慎项，执行前会再次确认
-- `10.10` 为只读检查入口，不修改系统
-- SSH 密码登录、root 登录策略、端口等 SSH 基线策略，仍应回到初始化 SSH 模块统一管理
+- `3.1` 检测当前内核、XanMod 状态、BBR 能力，并在需要时安装或更新 XanMod
+- `3.2` 按测速/手动带宽和地区档位计算缓冲区，写入独立 sysctl，并持久化恢复 fq
+- `3.3` 识别当前 DNS 栈并按国外/国内模式配置 DNS，关键步骤失败时自动回滚
+- `3.4` 检测 Realm 后修正 timeout/keepalive 相关项，失败时自动回滚
+- `3.5` 区分临时禁用、永久禁用、恢复和只读查看 IPv6 状态
+- `3.6` 先展示总览，再顺序执行 `3.1 -> 3.2 -> 3.3 -> 3.4 -> 3.5`
+- `3.7` 为只读检测入口，只输出当前状态、依据与是否通过
 
 ## 常用命令
 
-先修改配置文件：
-
-```bash
-vim config/default.conf
-```
-
-建议先查看总览：
+查看总览：
 
 ```bash
 bash bootstrap.sh show init
 bash bootstrap.sh show maintain
+bash bootstrap.sh show network
 ```
 
-再做计划预览：
+计划预览：
 
 ```bash
 bash bootstrap.sh plan init
 bash bootstrap.sh plan maintain
+bash bootstrap.sh plan network
 ```
 
-交互式菜单：
+交互菜单：
 
 ```bash
 bash bootstrap.sh menu
 bash bootstrap.sh menu init
 bash bootstrap.sh menu maintain
+bash bootstrap.sh menu network
 ```
 
 真正执行：
@@ -195,115 +184,57 @@ bash bootstrap.sh menu maintain
 ```bash
 sudo bash bootstrap.sh init
 sudo bash bootstrap.sh maintain
-sudo bash bootstrap.sh run 05_ssh_hardening
-sudo bash bootstrap.sh run 27_tuning_entry
+sudo bash bootstrap.sh network
+sudo bash bootstrap.sh run 30_xanmod_bbr3
+sudo bash bootstrap.sh run 31_bbr_landing_optimization
 ```
 
 仅模拟输出，不改系统：
 
 ```bash
 sudo bash bootstrap.sh init --dry-run
-sudo bash bootstrap.sh menu init --dry-run
-sudo bash bootstrap.sh menu maintain --dry-run
+sudo bash bootstrap.sh menu network --dry-run
+sudo bash bootstrap.sh plan network
 ```
 
 ## 菜单规则
 
 - 根菜单中：`0 = 退出程序`
 - 任何子菜单中：`0 = 返回上一级菜单`
-- 这个规则同时适用于 `whiptail` 分支和纯文本回退菜单
 - `menu` 模式只负责快速直接执行
 - `show` 模式负责详细查看
 - `plan` 模式负责预演输出
 
-补充说明：
-
-- 如果你从根菜单进入 `maintain` 菜单，按 `0` 会回到根菜单
-- 如果你在 `maintain` 菜单中进入第 `10` 项，按 `0` 会回到 `maintain` 主菜单
-- 只有在根菜单中按 `0`，程序才真正退出
-
 ## 初始化菜单快捷模式
 
 - 初始化菜单支持“从第 2 步顺序执行到指定步骤”的快捷模式
-- 在 `bash bootstrap.sh menu init` 中输入 `99`，即可进入该模式
-- 进入后需要再次输入目标步骤号
-- 例如输入 `7`，就会按顺序执行第 `2,3,4,5,6,7` 步
-- 输入 `0` 会返回上一级菜单，不执行任何步骤
-- 正式执行前，程序会先展示将要顺序执行的步骤列表，并要求再次确认
+- 在 `bash bootstrap.sh menu init` 中输入 `99`
+- 再输入目标步骤号，例如 `7`
+- 程序会按顺序执行 `2,3,4,5,6,7`
 
 ## 长期维护菜单快捷模式
 
-- 在 `bash bootstrap.sh menu maintain` 中输入 `9`，会进入“顺序执行 1 到 8”的确认界面
-- 确认界面会列出这次将要执行的维护清单
-- 在该确认界面中输入 `yes` 才会继续执行
-- 在该确认界面中输入 `0` 会返回长期维护主菜单
+- 在 `bash bootstrap.sh menu maintain` 中输入 `9`
+- 程序会先展示将执行的维护清单
+- 只有输入 `yes` 才会继续执行
 
-## 谨慎操作说明
+## 网络调优状态入口
 
-这些项目的设计原则是“默认保守，显式确认后再改”：
+`3.7` 只做只读检测，不做改动。输出项包括：
 
-- `10.1` 只在 `SAFE_TUNING_PROFILE=baseline` 时真正写入保守 sysctl 配置；默认 `none` 不改系统
-- `10.2` 设置 `UseDNS no`，可能改善 SSH 登录等待，但不适合依赖反向 DNS 审计或策略的环境
-- `10.3` 设置 SSH `Ciphers` 列表，是安全性与兼容性的折中项，可能影响过旧客户端
-- `10.4` 禁 ping 不等于真正安全，只是降低可见性，也会影响基于 ping 的监控与排障
-- `10.5` 普通单机 VPS 默认不建议乱开网络转发
-- `10.6` 到 `10.9` 都属于内核参数调优项，不是“改了就更快”，必须结合负载验证
-- `10.10` 是只读检查入口，适合作为执行前的状态审查
+- 内核版本 / XanMod / BBR 能力
+- BBR 调优实际状态与持久化 fq 状态
+- DNS 净化模式 / 上游 DNS / DoT 状态
+- Realm timeout 修复状态
+- IPv6 当前状态
 
-## 建议自检
+## 开发与检查
 
-修改后建议先做这些无破坏检查：
+建议至少执行：
 
 ```bash
-bash -n bootstrap.sh lib/*.sh modules/*.sh maintenance/*.sh maintenance/cautious/*.sh roles/*.sh
+bash -n bootstrap.sh lib/*.sh modules/*.sh maintenance/*.sh maintenance/network/*.sh roles/*.sh
 bash bootstrap.sh show init
 bash bootstrap.sh show maintain
+bash bootstrap.sh show network
 ```
-
-当前环境如果没有交互式 TTY，则无法真正进入 `menu` 做手工点选测试；这时至少应完成上面的静态语法检查和 `show` 检查。
-
-## 模块注册表
-
-`config/module-registry.tsv` 是展示层与菜单层的元数据来源，定义了：
-
-- 初始化步骤编号
-- 模块 ID
-- 所属阶段
-- 中文标题
-- 中文说明
-- 风险级别
-- 是否默认勾选
-- 依赖关系
-- 对应脚本路径
-
-这一版中，注册表除了 `init` 和 `maintain` 外，还增加了 `cautious` 阶段，用来承载长期维护第 `10` 项内部的 10.1 到 10.10 子项元数据。
-
-## 重要安全说明
-
-- `00_nodequality.sh` 会按要求执行固定动作：`bash <(curl -sL https://run.NodeQuality.com)`。
-- SSH 加固遵循“安全门”：
-  - 先有管理用户
-  - 先有有效 `authorized_keys`
-  - 通过检测后才允许关闭密码登录
-- 当 `SSH_PORT` 不等于 `22` 时，必须显式设置 `CONFIRM_SSH_PORT_CHANGE="true"` 才会真正切换端口。
-- 如果未确认非 `22` 端口：
-  - 初始化第 `6` 步不会真的把 SSH 切换到新端口
-  - 初始化第 `7` 步不会只放行新端口
-  - 会明确提示你先确认云防火墙/安全组已同步
-- 默认只放行 SSH 端口，不会自动开放 `80/443`
-- 不会实现任何重装系统、覆盖磁盘或破坏块设备的逻辑
-- 谨慎操作子菜单中的系统修改项，都会在执行前再次确认
-
-## 日志与状态
-
-- 每次入口执行会生成独立日志文件：`logs/<run-id>-<mode>.log`
-- 正常执行时状态会写入：`state/runtime.state`
-- `plan` / `dry-run` 会使用临时 state 文件，不污染真实 `runtime.state`
-- 长期维护的审查报告写入：`state/reports/`
-- 变更记录写入：`state/change-log.tsv`
-
-## 后续扩展建议
-
-- 在 `roles/` 中加入角色级功能，例如 `docker`、`web`、`proxy`
-- 在 `maintenance/` 或 `maintenance/cautious/` 中继续追加新的可审查脚本
-- 需要额外配置时，优先通过 `config/default.conf` 加变量，不要把常量硬编码到模块内部

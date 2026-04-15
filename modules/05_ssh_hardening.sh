@@ -80,13 +80,13 @@ main() {
     applied_password_auth="no"
   fi
 
-  log info "Writing SSH policy for this stage: PubkeyAuthentication=${applied_pubkey_auth}, PasswordAuthentication=${applied_password_auth}, KbdInteractiveAuthentication=${applied_kbd_auth}, PermitRootLogin=${permit_root_login}, Port=${applied_port}"
+  log info "本阶段将写入 SSH 策略：pubkey=${applied_pubkey_auth} password=${applied_password_auth} kbd=${applied_kbd_auth} root=${permit_root_login} port=${applied_port}"
   sshd_apply_managed_settings "${applied_port}" "${applied_pubkey_auth}" "${applied_password_auth}" "${applied_kbd_auth}" "${permit_root_login}"
 
   if [[ "${safe_gate_passed}" != "yes" ]]; then
-    log info "Safe gate not passed yet. SSH will stay in transitional mode: PubkeyAuthentication=yes, PasswordAuthentication=yes, KbdInteractiveAuthentication=no."
+    log info "safe gate 未通过：当前保持过渡策略 pubkey=yes password=yes kbd=no"
   elif [[ "${applied_password_auth}" == "no" ]]; then
-    log info "Safe gate passed. SSH password login will now be disabled."
+    log info "safe gate 已通过：当前收紧为 pubkey=yes password=no kbd=no"
   fi
 
   validate_sshd_config

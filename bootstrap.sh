@@ -13,15 +13,16 @@ usage() {
 Usage:
   bash bootstrap.sh init [--config /path/to/conf] [--dry-run]
   bash bootstrap.sh maintain [--config /path/to/conf] [--dry-run]
+  bash bootstrap.sh network [--config /path/to/conf] [--dry-run]
   bash bootstrap.sh run <module_name> [--config /path/to/conf] [--dry-run]
   bash bootstrap.sh sync-runtime-copy [--dry-run]
   bash bootstrap.sh step <step_no[,step_no...]> [--config /path/to/conf] [--dry-run]
   bash bootstrap.sh stepseq <target_step_no> [--config /path/to/conf] [--dry-run]
   bash bootstrap.sh preflight [--config /path/to/conf]
-  bash bootstrap.sh plan init|maintain|install-shortcut|sync-runtime-copy
+  bash bootstrap.sh plan init|maintain|network|install-shortcut|sync-runtime-copy
   bash bootstrap.sh plan run <module_name>
-  bash bootstrap.sh show init|maintain [--config /path/to/conf]
-  bash bootstrap.sh menu [init|maintain] [--config /path/to/conf] [--dry-run]
+  bash bootstrap.sh show init|maintain|network [--config /path/to/conf]
+  bash bootstrap.sh menu [init|maintain|network] [--config /path/to/conf] [--dry-run]
   bash bootstrap.sh install-shortcut [--dry-run]
 
 Menu shortcuts:
@@ -29,7 +30,7 @@ Menu shortcuts:
   Any submenu: 0 = 返回上一级菜单
   Init list menu: 99 = 从第 2 步开始顺序执行到指定步骤
   Maintain menu: 9 = 顺序执行 1 到 8
-  Maintain menu: 10 = 谨慎操作子菜单
+  Network menu: 0 = 返回上一级菜单
 
 Menu purpose:
   menu = 快速直接执行
@@ -138,6 +139,7 @@ resolve_module_path() {
   for candidate in \
     "${PROJECT_ROOT}/modules/${normalized}" \
     "${PROJECT_ROOT}/maintenance/${normalized}" \
+    "${PROJECT_ROOT}/maintenance/network/${normalized}" \
     "${PROJECT_ROOT}/roles/${normalized}"
   do
     if [[ -f "${candidate}" ]]; then
@@ -157,8 +159,8 @@ format_step_header() {
     printf '[第 %s 步]' "${step_no}"
   elif [[ "${phase}" == "maintain" && -n "${step_no}" && "${step_no}" != "-" ]]; then
     printf '[维护 %s]' "${step_no}"
-  elif [[ "${phase}" == "cautious" && -n "${step_no}" && "${step_no}" != "-" ]]; then
-    printf '[谨慎 %s]' "${step_no}"
+  elif [[ "${phase}" == "network" && -n "${step_no}" && "${step_no}" != "-" ]]; then
+    printf '[网络 %s]' "${step_no}"
   else
     printf '[%s]' "$(phase_label_zh "${phase}")"
   fi
@@ -196,28 +198,6 @@ EOF
 
 show_phase_overview() {
   local phase="$1"
-  if [[ "${phase}" == "maintain" ]]; then
-    printf '%s\n' "$(render_phase_overview "maintain")"
-    cat <<'EOF'
-[维护 9] 顺序执行 1 到 8 【中风险】
-说明：先展示长期维护 1 到 8 的执行清单，确认后再按顺序执行。
-风险：中
-默认执行：否
-依赖：1 到 8
-脚本：菜单快捷模式
-
-[维护 10] 谨慎操作入口 【高风险】
-说明：进入 10.1 到 10.10 的谨慎操作子菜单。这里的项目主要覆盖 UseDNS、Ciphers、ICMP/Ping 控制以及各类 sysctl / 网络参数调优项。
-风险：高
-默认执行：否
-依赖：按具体子项而定
-脚本：菜单子菜单
-
-EOF
-    printf '%s\n' "$(render_phase_overview "cautious")"
-    return 0
-  fi
-
   printf '%s\n' "$(render_phase_overview "${phase}")"
 }
 
@@ -590,7 +570,7 @@ menu_action_summary() {
       maintain)
         printf '%s %s\n' "${step_no}" "${title_zh}"
         ;;
-      cautious)
+      network)
         printf '%s %s\n' "${step_no}" "${title_zh}"
         ;;
       *)
@@ -620,8 +600,8 @@ menu_action_summary() {
     maintain)
       printf '长期维护 %s 项（%s）\n' "${count}" "${numbers}"
       ;;
-    cautious)
-      printf '谨慎操作 %s 项（%s）\n' "${count}" "${numbers}"
+    network)
+      printf '网络调优 %s 项（%s）\n' "${count}" "${numbers}"
       ;;
     *)
       printf '%s %s 项\n' "$(phase_label_zh "${phase}")" "${count}"
@@ -1033,20 +1013,17 @@ render_maintain_menu_prompt() {
 
   header+=$'9. 顺序执行 1 到 8\n'
   header+=$'   先展示 1 到 8 的清单，确认后按顺序执行。\n'
-  header+=$'10. 谨慎操作入口\n'
-  header+=$'   进入 10.1 到 10.10 的谨慎操作子菜单。\n'
   header+=$'0. 返回上一级菜单\n\n'
   header+=$'输入规则：\n'
   header+=$'- 输入单个数字直接执行对应项目\n'
   header+=$'- 输入 3，进入端口管理子菜单；顺序执行时第 3 项只做查看，不进入子菜单\n'
   header+=$'- 输入多个数字，例如 1,2,3，按输入顺序执行这些项目\n'
   header+=$'- 输入 9，顺序执行 1 到 8\n'
-  header+=$'- 输入 10，进入谨慎操作子菜单\n'
 
   printf '%s' "${header}"
 }
 
-render_cautious_menu_prompt() {
+render_network_menu_prompt() {
   local header=""
   local line=""
   local step_no module_id entry_phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh
@@ -1059,13 +1036,13 @@ render_cautious_menu_prompt() {
     fi
     header+=$'\n'
     header+="   ${short_desc_zh}"$'\n'
-  done < <(registry_lines "cautious")
+  done < <(registry_lines "network")
 
   header+=$'0. 返回上一级菜单\n\n'
   header+=$'输入规则：\n'
-  header+=$'- 输入单个数字，例如 2，执行 10.2\n'
-  header+=$'- 也可以输入完整编号，例如 10.2\n'
-  header+=$'- 可输入多个编号，例如 2,10 或 10.2,10.10\n'
+  header+=$'- 输入单个数字，例如 1，执行 3.1\n'
+  header+=$'- 也可以输入完整编号，例如 3.1\n'
+  header+=$'- 可输入多个编号，例如 1,7 或 3.1,3.7\n'
 
   printf '%s' "${header}"
 }
@@ -1078,8 +1055,8 @@ prompt_maintain_execution_input() {
   ui_prompt_input "长期维护菜单" "$(render_maintain_menu_prompt)"
 }
 
-prompt_cautious_execution_input() {
-  ui_prompt_input "谨慎操作子菜单" "$(render_cautious_menu_prompt)"
+prompt_network_execution_input() {
+  ui_prompt_input "网络调优子菜单" "$(render_network_menu_prompt)"
 }
 
 split_port_input_tokens() {
@@ -1304,7 +1281,7 @@ confirm_maintain_sequence() {
   ui_confirm_with_back "确认顺序执行 1 到 8" "你将按顺序执行以下长期维护项目：\n\n${summary}"
 }
 
-resolve_cautious_selection_token() {
+resolve_network_selection_token() {
   local token="$1"
   local normalized=""
   normalized="$(basename "${token}")"
@@ -1327,22 +1304,22 @@ resolve_cautious_selection_token() {
       return 0
     fi
 
-    if [[ "${step_no}" == 10.* && "${normalized}" == "${step_no#10.}" ]]; then
+    if [[ "${step_no}" == 3.* && "${normalized}" == "${step_no#3.}" ]]; then
       printf '%s\n' "${module_id}"
       return 0
     fi
-  done < <(registry_lines "cautious")
+  done < <(registry_lines "network")
 
   return 1
 }
 
-normalize_cautious_selection_safe() {
+normalize_network_selection_safe() {
   local token="" module_id=""
   local normalized_ids=()
 
   for token in "$@"; do
     [[ -n "${token}" ]] || continue
-    module_id="$(resolve_cautious_selection_token "${token}" || true)"
+    module_id="$(resolve_network_selection_token "${token}" || true)"
     [[ -n "${module_id}" ]] || return 1
     if ! selection_contains "${module_id}" "${normalized_ids[@]}"; then
       normalized_ids+=("${module_id}")
@@ -1352,17 +1329,17 @@ normalize_cautious_selection_safe() {
   printf '%s\n' "${normalized_ids[@]}"
 }
 
-is_cautious_read_only_module() {
-  [[ "${1:-}" == "38_status_review" ]]
+is_network_read_only_module() {
+  [[ "${1:-}" == "36_network_tuning_status" ]]
 }
 
-confirm_cautious_module_execution() {
+confirm_network_module_execution() {
   local module_id="$1"
   local line=""
   line="$(registry_find_line "${module_id}" || true)"
-  [[ -n "${line}" ]] || die "Cautious module not found: ${module_id}"
+  [[ -n "${line}" ]] || die "Network tuning module not found: ${module_id}"
 
-  if is_cautious_read_only_module "${module_id}"; then
+  if is_network_read_only_module "${module_id}"; then
     return 0
   fi
 
@@ -1374,13 +1351,13 @@ confirm_cautious_module_execution() {
     "即将执行：${step_no} ${title_zh}\n风险：$(risk_label_zh "${risk_level}")\n脚本：${script_path}\n\n作用：${short_desc_zh}\n\n将进行的修改：${detail_zh}"
 }
 
-run_cautious_modules() {
+run_network_modules() {
   local selected=("$@")
   local module_id=""
 
   for module_id in "${selected[@]}"; do
-    confirm_cautious_module_execution "${module_id}" || return 1
-    run_phase_from_registry "cautious" "${module_id}"
+    confirm_network_module_execution "${module_id}" || return 1
+    run_phase_from_registry "network" "${module_id}"
   done
 }
 
@@ -1449,16 +1426,16 @@ menu_init_phase() {
   done
 }
 
-menu_cautious_phase() {
+menu_network_phase() {
   while true; do
     local raw_input=""
-    if ! prompt_cautious_execution_input; then
+    if ! prompt_network_execution_input; then
       return 0
     fi
     raw_input="$(ui_trim_value "${UI_LAST_INPUT}")"
 
     if [[ -z "${raw_input}" ]]; then
-      ui_warn_message "输入为空" "请输入谨慎操作编号，例如 2、10.2 或 10.10。"
+      ui_warn_message "输入为空" "请输入网络调优编号，例如 1、3.1 或 3.7。"
       continue
     fi
 
@@ -1469,14 +1446,14 @@ menu_cautious_phase() {
     local raw_tokens=()
     mapfile -t raw_tokens < <(split_menu_input_tokens "${raw_input}")
     ((${#raw_tokens[@]} > 0)) || {
-      ui_warn_message "输入无效" "请输入单个编号，或多个逗号分隔的编号。例如：2、10.2 或 2,10。"
+      ui_warn_message "输入无效" "请输入单个编号，或多个逗号分隔的编号。例如：1、3.1 或 1,7。"
       continue
     }
 
     local token=""
     for token in "${raw_tokens[@]}"; do
       if [[ ! "${token}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-        ui_warn_message "输入无效" "只支持输入数字编号，例如 2、10.2 或 2,10。"
+        ui_warn_message "输入无效" "只支持输入数字编号，例如 1、3.1 或 1,7。"
         continue 2
       fi
     done
@@ -1488,14 +1465,14 @@ menu_cautious_phase() {
 
     local normalized_selection=()
     local selection_summary=""
-    mapfile -t normalized_selection < <(normalize_cautious_selection_safe "${raw_tokens[@]}" || true)
+    mapfile -t normalized_selection < <(normalize_network_selection_safe "${raw_tokens[@]}" || true)
     ((${#normalized_selection[@]} > 0)) || {
-      ui_warn_message "输入无效" "存在无法识别的谨慎操作编号，请按菜单显示的编号输入。"
+      ui_warn_message "输入无效" "存在无法识别的网络调优编号，请按菜单显示的编号输入。"
       continue
     }
 
-    selection_summary="$(menu_action_summary "cautious" "${normalized_selection[@]}")"
-    menu_execute_with_feedback "${selection_summary}" run_cautious_modules "${normalized_selection[@]}" || true
+    selection_summary="$(menu_action_summary "network" "${normalized_selection[@]}")"
+    menu_execute_with_feedback "${selection_summary}" run_network_modules "${normalized_selection[@]}" || true
   done
 }
 
@@ -1508,7 +1485,7 @@ menu_maintain_phase() {
     raw_input="$(ui_trim_value "${UI_LAST_INPUT}")"
 
     if [[ -z "${raw_input}" ]]; then
-      ui_warn_message "输入为空" "请输入维护编号，例如 1、1,2,3、9 或 10。"
+      ui_warn_message "输入为空" "请输入维护编号，例如 1、1,2,3 或 9。"
       continue
     fi
 
@@ -1528,10 +1505,6 @@ menu_maintain_phase() {
         confirm_maintain_sequence "${sequence_ids[@]}" || continue
         sequence_summary="$(menu_action_summary "maintain" "${sequence_ids[@]}")"
         menu_execute_with_feedback "${sequence_summary}" run_phase_from_registry "maintain" "menu" "${sequence_ids[@]}" || true
-        continue
-        ;;
-      10)
-        menu_cautious_phase
         continue
         ;;
     esac
@@ -1556,8 +1529,8 @@ menu_maintain_phase() {
       continue
     fi
 
-    if selection_contains "3" "${raw_tokens[@]}" || selection_contains "9" "${raw_tokens[@]}" || selection_contains "10" "${raw_tokens[@]}"; then
-      ui_warn_message "输入无效" "3、9 和 10 是特殊入口，请单独输入。"
+    if selection_contains "3" "${raw_tokens[@]}" || selection_contains "9" "${raw_tokens[@]}"; then
+      ui_warn_message "输入无效" "3 和 9 是特殊入口，请单独输入。"
       continue
     fi
 
@@ -1583,6 +1556,9 @@ menu_phase() {
       ;;
     maintain)
       menu_maintain_phase
+      ;;
+    network)
+      menu_network_phase
       ;;
     *)
       die "Unsupported menu phase: ${phase}"
@@ -1613,7 +1589,7 @@ menu_root() {
       0|"")
         return 0
         ;;
-      init|maintain)
+      init|maintain|network)
         menu_phase "${current_phase}"
         current_phase=""
         initial_phase=""
@@ -1649,6 +1625,12 @@ main() {
       prepare_context
       ensure_runtime_initialized
       run_phase_from_registry "maintain"
+      ;;
+    network)
+      RUN_MODE="network"
+      prepare_context
+      ensure_runtime_initialized
+      run_phase_from_registry "network"
       ;;
     run)
       [[ -n "${BOOTSTRAP_TARGET}" ]] || die "run mode requires a module name"
@@ -1766,6 +1748,12 @@ EOF
           ensure_runtime_initialized
           run_phase_from_registry "maintain" "command"
           ;;
+        network)
+          RUN_MODE="plan-network"
+          prepare_context
+          ensure_runtime_initialized
+          run_phase_from_registry "network" "command"
+          ;;
         install-shortcut)
           RUN_MODE="plan-install-shortcut"
           prepare_shortcut_context
@@ -1792,19 +1780,19 @@ EOF
           fi
           ;;
         *)
-          die "plan mode requires init, maintain, install-shortcut, sync-runtime-copy, or run <module>"
+          die "plan mode requires init, maintain, network, install-shortcut, sync-runtime-copy, or run <module>"
           ;;
       esac
       ;;
     show)
       case "${BOOTSTRAP_TARGET}" in
-        init|maintain)
+        init|maintain|network)
           RUN_MODE="show-${BOOTSTRAP_TARGET}"
           prepare_context
           show_phase_overview "${BOOTSTRAP_TARGET}"
           ;;
         *)
-          die "show mode requires init or maintain"
+          die "show mode requires init, maintain, or network"
           ;;
       esac
       ;;
@@ -1823,11 +1811,11 @@ EOF
         "")
           menu_root
           ;;
-        init|maintain)
+        init|maintain|network)
           menu_root "${BOOTSTRAP_TARGET}"
           ;;
         *)
-          die "menu mode requires init, maintain, or no phase"
+          die "menu mode requires init, maintain, network, or no phase"
           ;;
       esac
       ;;
