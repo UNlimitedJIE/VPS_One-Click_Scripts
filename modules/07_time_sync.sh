@@ -59,7 +59,7 @@ prompt_timezone_selection() {
 
   while true; do
     if ! ui_prompt_input \
-      "第 7 步 配置时区" \
+      "第 8 步 配置时区" \
       "请选择时区：\n1. UTC\n2. Asia/Shanghai\n3. Asia/Tokyo\n4. Asia/Singapore\n5. Europe/London\n6. America/New_York\n7. America/Chicago\n8. America/Denver\n9. America/Los_Angeles\n10. America/Phoenix\n11. America/Anchorage\n12. Pacific/Honolulu\n13. 自定义输入\n0. 返回\n当前默认：${current_timezone}" \
       ""; then
       return 1
@@ -78,7 +78,7 @@ prompt_timezone_selection() {
         ;;
       13)
         while true; do
-          if ! ui_prompt_input "第 7 步 自定义时区" "请输入完整时区名称，例如 Asia/Hong_Kong\n输入 0 返回上一步"; then
+          if ! ui_prompt_input "第 8 步 自定义时区" "请输入完整时区名称，例如 Asia/Hong_Kong\n输入 0 返回上一步"; then
             return 1
           fi
           custom_timezone="$(ui_trim_value "${UI_LAST_INPUT}")"

@@ -40,7 +40,7 @@ confirm_cutover_execution() {
   local answer=""
 
   if is_true "${PLAN_ONLY:-false}" || is_true "${DRY_RUN:-false}"; then
-    log info "[plan] 第 5 步将要求确认后关闭 root 远程 SSH 登录。"
+    log info "[plan] 第 6 步将要求确认后关闭 root 远程 SSH 登录。"
     return 0
   fi
 
@@ -86,9 +86,9 @@ ensure_cutover_prerequisites() {
   command_exists sshd || die "sshd 命令不存在，无法继续。"
   validate_sshd_config
   safe_gate_state="$(get_state "SSH_SAFE_GATE_PASSED" || true)"
-  [[ "${safe_gate_state}" == "yes" ]] || die "SSH_SAFE_GATE_PASSED 不是 yes，当前未满足最终收口条件。请先重新完成第 4 步并确认目标账户公钥已有效安装。"
+  [[ "${safe_gate_state}" == "yes" ]] || die "SSH_SAFE_GATE_PASSED 不是 yes，当前未满足最终收口条件。请先重新完成第 5 步并确认目标账户公钥已有效安装。"
   stage5_ready_state="$(ssh_stage5_ready_state_for_user "${ADMIN_USER}")"
-  [[ "${stage5_ready_state}" == "yes" ]] || die "当前还不满足进入第 5 步的条件。请先确认 SSH 公钥已就绪且 passwordauthentication 已收紧为 no。"
+  [[ "${stage5_ready_state}" == "yes" ]] || die "当前还不满足进入第 6 步的条件。请先确认 SSH 公钥已就绪且 passwordauthentication 已收紧为 no。"
 
   effective_port="$(effective_ssh_port_for_changes)"
   [[ "${effective_port}" =~ ^[0-9]+$ ]] || die "当前 SSH 端口无法识别，不能继续关闭 root 远程登录。"
@@ -98,7 +98,7 @@ ensure_cutover_prerequisites() {
   ssh_port_is_listening_locally "${effective_port}" || die "当前目标 SSH 端口 ${effective_port} 未检测到本机监听，不能继续关闭 root 远程登录。"
   password_policy="$(current_password_authentication_mode || true)"
   pubkey_policy="$(current_pubkey_authentication_mode || true)"
-  [[ "${password_policy}" == "no" ]] || die "当前 SSH passwordauthentication 不是 no，不能继续最终收口。请先重新完成第 4 步并验证公钥登录。"
+  [[ "${password_policy}" == "no" ]] || die "当前 SSH passwordauthentication 不是 no，不能继续最终收口。请先重新完成第 5 步并验证公钥登录。"
   [[ "${pubkey_policy}" == "yes" ]] || die "当前 SSH pubkeyauthentication 不是 yes，不能继续最终收口。请先修复 SSH 配置。"
   log info "Next connection should use SSH port: ${effective_port}"
 }

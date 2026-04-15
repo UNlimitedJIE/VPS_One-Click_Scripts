@@ -60,7 +60,7 @@ prompt_stage_admin_user_value() {
   local validation_error=""
 
   while true; do
-    if ! ui_prompt_input "第 4.1 段 管理用户名" "当前正在设置：管理用户名\n请输入要创建/使用的管理用户名。\n仅允许字母、数字、下划线、短横线，且不能为 root。\n${cancel_hint}"; then
+    if ! ui_prompt_input "第 5.1 段 管理用户名" "当前正在设置：管理用户名\n请输入要创建/使用的管理用户名。\n仅允许字母、数字、下划线、短横线，且不能为 root。\n${cancel_hint}"; then
       return 1
     fi
 
@@ -102,19 +102,19 @@ confirm_stage_admin_user_selection() {
     return 0
   fi
 
-  ui_require_interactive || die "第 4 步需要交互式确认管理用户名，请在交互式终端中执行。"
+  ui_require_interactive || die "第 5 步需要交互式确认管理用户名，请在交互式终端中执行。"
 
   if [[ -n "${validation_error}" ]]; then
-    ui_warn_message "第 4.1 段 管理用户名" "当前 ADMIN_USER 为空或无效。\n当前配置来源：${config_source}\n现在需要重新输入管理用户名。"
+    ui_warn_message "第 5.1 段 管理用户名" "当前 ADMIN_USER 为空或无效。\n当前配置来源：${config_source}\n现在需要重新输入管理用户名。"
     username="$(prompt_stage_admin_user_value "输入 0 返回：")" || return 1
     set_runtime_admin_user "${username}"
     persist_stage_admin_user_selection "${username}"
-    log info "Stage 4 will use admin user: ${ADMIN_USER}"
+    log info "Stage 5 will use admin user: ${ADMIN_USER}"
     return 0
   fi
 
   while true; do
-    if ! ui_prompt_input "第 4.1 段 确认管理用户名" "当前默认用户名：${original_admin_user}\n当前配置来源：${config_source}\n直接回车：沿用当前值\n输入新的合法用户名：直接替换\n输入 0：返回" "${original_admin_user}"; then
+    if ! ui_prompt_input "第 5.1 段 确认管理用户名" "当前默认用户名：${original_admin_user}\n当前配置来源：${config_source}\n直接回车：沿用当前值\n输入新的合法用户名：直接替换\n输入 0：返回" "${original_admin_user}"; then
       return 1
     fi
 
@@ -131,10 +131,10 @@ confirm_stage_admin_user_selection() {
 
     set_runtime_admin_user "${username}"
     if [[ "${username}" == "${original_admin_user}" ]]; then
-      log info "Stage 4 will keep admin user: ${ADMIN_USER}"
+      log info "Stage 5 will keep admin user: ${ADMIN_USER}"
     else
       persist_stage_admin_user_selection "${username}"
-      log info "Stage 4 will use updated admin user: ${ADMIN_USER}"
+      log info "Stage 5 will use updated admin user: ${ADMIN_USER}"
     fi
     return 0
   done
@@ -142,12 +142,12 @@ confirm_stage_admin_user_selection() {
 
 stage_intro_body() {
   cat <<EOF
-即将开始第 4 步：管理用户接入。
+即将开始第 5 步：管理用户接入。
 
 接下来会依次完成：
-1. 4.1 确认管理用户名
-2. 4.2 配置 sudo 行为
-3. 4.3 配置并验证 SSH 公钥
+1. 5.1 确认管理用户名
+2. 5.2 配置 sudo 行为
+3. 5.3 配置并验证 SSH 公钥
 4. 执行 SSH 接入准备
 EOF
 }
@@ -169,12 +169,12 @@ stage_before_hardening_body() {
   fi
 
   cat <<EOF
-即将执行第 4 步里的 SSH 接入准备。
+即将执行第 5 步里的 SSH 接入准备。
 管理用户：${ADMIN_USER:-<未设置>}
 当前 authorized_keys：${auth_ready}
 SSH 公钥源：${AUTHORIZED_KEYS_FILE:-<未设置>}
 ${port_note}
-这一阶段会按 safe gate 收敛 SSH 策略；root 收口仍在第 5 步。
+这一阶段会按 safe gate 收敛 SSH 策略；root 收口仍在第 6 步。
 EOF
 }
 
@@ -241,14 +241,14 @@ stage_connection_summary() {
   safe_gate_state="${safe_gate_state:-$(ssh_safe_gate_state_for_user "${ADMIN_USER}")}"
 
   cat <<EOF
-第 4 步当前状态
+第 5 步当前状态
 - 当前管理用户：${ADMIN_USER:-<未设置>}
 - 当前 sudo 模式：${sudo_mode}
 - 当前 authorized_keys：${auth_ready}
 - 当前 pubkeyauthentication：${pubkey_policy:-unknown}
 - 当前 passwordauthentication：${password_policy:-unknown}
 - 当前 safe gate：${safe_gate_state}
-- 当前是否满足进入第 5 步的条件：${step5_ready}
+- 当前是否满足进入第 6 步的条件：${step5_ready}
 EOF
 }
 
@@ -270,7 +270,7 @@ main() {
   bash "${SCRIPT_DIR}/03_admin_user.sh"
   bash "${SCRIPT_DIR}/04_ssh_keys.sh"
   if ! admin_authorized_keys_ready_for_user "${ADMIN_USER}"; then
-    die "第 4.3 段未完成：目标账户 authorized_keys 仍未 ready。"
+    die "第 5.3 段未完成：目标账户 authorized_keys 仍未 ready。"
   fi
 
   confirm_stage_checkpoint "执行 SSH 加固前确认" "$(stage_before_hardening_body)" || die "SSH 加固已取消。"

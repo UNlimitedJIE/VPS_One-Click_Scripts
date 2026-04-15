@@ -178,7 +178,7 @@ main() {
   fi
 
   if [[ "${current_root_auth}" != "no" ]]; then
-    log info "Root remote SSH login is still enabled in this stage; 第 5 步才会做最终收口。"
+    log info "Root remote SSH login is still enabled in this stage; 第 6 步才会做最终收口。"
   fi
 }
 

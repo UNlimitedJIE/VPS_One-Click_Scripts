@@ -75,7 +75,7 @@ capture_admin_sudo_password_value() {
   local password_confirm=""
 
   while true; do
-    if ! ui_read_secret "第 4.2 段 设置 sudo 验证密码" "请输入 ${ADMIN_USER} 用于 sudo 验证的密码："; then
+    if ! ui_read_secret "第 5.2 段 设置 sudo 验证密码" "请输入 ${ADMIN_USER} 用于 sudo 验证的密码："; then
       die "无法安全读取 sudo 验证密码输入，请在交互式终端中执行。"
     fi
     password="${UI_LAST_SECRET}"
@@ -86,7 +86,7 @@ capture_admin_sudo_password_value() {
       continue
     fi
 
-    if ! ui_read_secret "第 4.2 段 确认 sudo 验证密码" "请再次输入 ${ADMIN_USER} 用于 sudo 验证的密码："; then
+    if ! ui_read_secret "第 5.2 段 确认 sudo 验证密码" "请再次输入 ${ADMIN_USER} 用于 sudo 验证的密码："; then
       password=""
       die "无法安全读取 sudo 验证密码确认输入，请在交互式终端中执行。"
     fi
@@ -125,7 +125,7 @@ capture_admin_sudo_mode() {
 
   while true; do
     if ! ui_prompt_input \
-      "第 4.2 段 配置 sudo 行为" \
+      "第 5.2 段 配置 sudo 行为" \
       "当前正在设置：sudo 是否需要密码\n- nopasswd = 执行 sudo 不需要密码\n- password = 执行 sudo 需要密码\n- 如果选择 password，接下来会设置该管理用户用于 sudo 验证的密码\n- 0 = 返回" \
       "${default_mode}"; then
       die "无法读取 sudo 模式选择，请在交互式终端中执行。"

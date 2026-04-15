@@ -1042,6 +1042,9 @@ module_completion_state_found() {
     02_update_base)
       [[ -n "$(get_state "BASE_UPDATED" || true)" ]]
       ;;
+    025_change_ssh_port)
+      [[ -n "$(get_state "SSH_PORT_STEP_DONE" || true)" || -n "$(get_state "SSH_PORT_PERSISTED_VALUE" || true)" ]]
+      ;;
     03_admin_access_stage)
       [[ -n "$(get_state "AUTHORIZED_KEYS_PRESENT" || true)" || -n "$(get_state "SSH_SAFE_GATE_PASSED" || true)" || -n "$(get_state "AUTHORIZED_KEYS_COUNT" || true)" ]]
       ;;
@@ -1170,6 +1173,12 @@ admin_access_prerequisite_conditions_satisfied() {
   admin_authorized_keys_ready_for_user "${ADMIN_USER}" || return 1
   command_exists sshd || return 1
   sshd -t >/dev/null 2>&1
+}
+
+ssh_port_change_prerequisite_conditions_satisfied() {
+  command_exists sshd || return 1
+  sshd -t >/dev/null 2>&1 || return 1
+  current_ssh_port >/dev/null 2>&1
 }
 
 nftables_prerequisite_conditions_satisfied() {
@@ -1302,6 +1311,7 @@ module_prerequisite_conditions_satisfied() {
     00_nodequality) nodequality_prerequisite_conditions_satisfied ;;
     01_detect_system) detect_system_prerequisite_conditions_satisfied ;;
     02_update_base) update_base_prerequisite_conditions_satisfied ;;
+    025_change_ssh_port) ssh_port_change_prerequisite_conditions_satisfied ;;
     03_admin_access_stage) admin_access_prerequisite_conditions_satisfied ;;
     06_nftables) nftables_prerequisite_conditions_satisfied ;;
     07_switch_admin_login) admin_cutover_prerequisite_conditions_satisfied ;;
@@ -1894,7 +1904,7 @@ warn_ssh_port_change_not_confirmed() {
   current_port="${current_port:-22}"
   log warn "Requested SSH_PORT=${SSH_PORT}, but CONFIRM_SSH_PORT_CHANGE is not enabled."
   log warn "For safety, SSH hardening and nftables will keep using the current port ${current_port}."
-  log warn "After confirming cloud firewall/security-group and external access are ready, set CONFIRM_SSH_PORT_CHANGE=\"true\" and rerun the merged admin-access stage plus the nftables step."
+  log warn "After confirming cloud firewall/security-group and external access are ready, run the SSH port change step or set CONFIRM_SSH_PORT_CHANGE=\"true\" before rerunning the admin-access and nftables steps."
 }
 
 nftables_config_path() {

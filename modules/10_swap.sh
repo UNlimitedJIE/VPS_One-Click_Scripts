@@ -75,7 +75,7 @@ prompt_swap_selection() {
     return 1
   fi
 
-  ui_require_interactive || die "第 10 步需要交互式终端来明确选择 swap 方案。"
+  ui_require_interactive || die "第 11 步需要交互式终端来明确选择 swap 方案。"
 
   current_swap="$(swap_show_output)"
   [[ -n "${current_swap}" ]] || current_swap="(none)"

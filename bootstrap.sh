@@ -37,8 +37,8 @@ Menu purpose:
   plan = 预演输出
 
 Init note:
-  初始化流程现在收口到第 11 步验收
-  原第 12 步 summary 已并入 11_verify 并从菜单移除
+  初始化流程现在收口到第 12 步验收
+  summary 阶段已并入 11_verify 并从菜单移除
 
 Examples:
   bash bootstrap.sh show init

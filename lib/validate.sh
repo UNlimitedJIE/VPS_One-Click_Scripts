@@ -203,7 +203,7 @@ validate_config() {
   preferred_source="$(preferred_authorized_keys_source_path)"
 
   if [[ -n "${AUTHORIZED_KEYS_FILE:-}" && "${AUTHORIZED_KEYS_FILE}" != "${preferred_source}" ]]; then
-    log info "当前 AUTHORIZED_KEYS_FILE=${AUTHORIZED_KEYS_FILE}，但第 4 步实际固定优先使用 ${preferred_source}；若该固定源无有效公钥，脚本会直接进入现场粘贴模式。"
+    log info "当前 AUTHORIZED_KEYS_FILE=${AUTHORIZED_KEYS_FILE}，但第 5 步实际固定优先使用 ${preferred_source}；若该固定源无有效公钥，脚本会直接进入现场粘贴模式。"
   fi
 
   if [[ -n "${AUTHORIZED_KEYS_FILE}" && ! -f "${AUTHORIZED_KEYS_FILE}" ]]; then
@@ -211,12 +211,12 @@ validate_config() {
       if [[ "${target_keys_ready}" == "yes" ]]; then
         log info "AUTHORIZED_KEYS_FILE 当前指向 /root 下路径，非 root 用户不可访问；若目标账户 authorized_keys 已安装，可忽略此提示。"
       else
-        log info "AUTHORIZED_KEYS_FILE 当前指向 /root 下路径；正常流程建议改用 ${preferred_source}，第 4 步也可直接粘贴公钥写入该固定路径。"
+        log info "AUTHORIZED_KEYS_FILE 当前指向 /root 下路径；正常流程建议改用 ${preferred_source}，第 5 步也可直接粘贴公钥写入该固定路径。"
       fi
     elif [[ "${target_keys_ready}" == "yes" ]]; then
       log info "AUTHORIZED_KEYS_FILE 源文件当前不可访问或不存在，但目标账户 authorized_keys 已安装完成。"
     else
-      log info "AUTHORIZED_KEYS_FILE 源文件尚未准备好：${AUTHORIZED_KEYS_FILE}。第 4 步可直接粘贴 SSH 公钥并写入 ${preferred_source}。"
+      log info "AUTHORIZED_KEYS_FILE 源文件尚未准备好：${AUTHORIZED_KEYS_FILE}。第 5 步可直接粘贴 SSH 公钥并写入 ${preferred_source}。"
     fi
   fi
 
@@ -225,7 +225,7 @@ validate_config() {
       if [[ "${target_keys_ready}" == "yes" ]]; then
         log info "AUTHORIZED_KEYS_FILE 当前没有有效公钥，但目标账户 authorized_keys 已安装完成。"
       else
-        log info "AUTHORIZED_KEYS_FILE 当前没有有效公钥：${AUTHORIZED_KEYS_FILE}。第 4 步可直接粘贴 SSH 公钥并覆盖写入 ${preferred_source}。"
+        log info "AUTHORIZED_KEYS_FILE 当前没有有效公钥：${AUTHORIZED_KEYS_FILE}。第 5 步可直接粘贴 SSH 公钥并覆盖写入 ${preferred_source}。"
       fi
     fi
   fi
@@ -320,8 +320,8 @@ run_preflight_checks() {
   fi
 
   if [[ -z "${AUTHORIZED_KEYS_FILE}" ]]; then
-    preflight_print_status "PENDING" "AUTHORIZED_KEYS_FILE" "当前未设置；第 4 步可直接粘贴 SSH 公钥并写入 ${preferred_source}"
-    preflight_add_issue pending "AUTHORIZED_KEYS_FILE 尚未准备好；首次执行第 4 步时可现场粘贴公钥"
+    preflight_print_status "PENDING" "AUTHORIZED_KEYS_FILE" "当前未设置；第 5 步可直接粘贴 SSH 公钥并写入 ${preferred_source}"
+    preflight_add_issue pending "AUTHORIZED_KEYS_FILE 尚未准备好；首次执行第 5 步时可现场粘贴公钥"
   elif [[ ! -f "${AUTHORIZED_KEYS_FILE}" ]]; then
     if authorized_keys_source_is_root_only_path "${AUTHORIZED_KEYS_FILE}" && [[ "${EUID}" -ne 0 ]] && [[ "${target_keys_ready}" == "yes" ]]; then
       preflight_print_status "PENDING" "AUTHORIZED_KEYS_FILE" "当前指向 /root 下路径，非 root 用户不可访问；但目标账户 authorized_keys 已安装，可忽略此提示"
@@ -330,8 +330,8 @@ run_preflight_checks() {
       preflight_print_status "PENDING" "AUTHORIZED_KEYS_FILE" "源文件当前不可访问或不存在；但目标账户 authorized_keys 已安装完成"
       preflight_add_issue pending "AUTHORIZED_KEYS_FILE 当前不可访问；如需后续维护，建议迁移到可读路径"
     else
-      preflight_print_status "PENDING" "AUTHORIZED_KEYS_FILE" "文件不存在：${AUTHORIZED_KEYS_FILE}；首次执行第 4 步时可直接粘贴 SSH 公钥"
-      preflight_add_issue pending "AUTHORIZED_KEYS_FILE 不存在；首次执行第 4 步时可现场粘贴公钥"
+      preflight_print_status "PENDING" "AUTHORIZED_KEYS_FILE" "文件不存在：${AUTHORIZED_KEYS_FILE}；首次执行第 5 步时可直接粘贴 SSH 公钥"
+      preflight_add_issue pending "AUTHORIZED_KEYS_FILE 不存在；首次执行第 5 步时可现场粘贴公钥"
     fi
   else
     key_count="$(count_valid_ssh_keys_in_file "${AUTHORIZED_KEYS_FILE}")"
@@ -341,8 +341,8 @@ run_preflight_checks() {
       preflight_print_status "PENDING" "AUTHORIZED_KEYS_FILE" "源文件中未检测到有效公钥；但目标账户 authorized_keys 已安装完成"
       preflight_add_issue pending "AUTHORIZED_KEYS_FILE 中没有有效公钥；当前不会阻塞后续 SSH 收紧"
     else
-      preflight_print_status "PENDING" "AUTHORIZED_KEYS_FILE" "未检测到有效公钥：${AUTHORIZED_KEYS_FILE}；第 4 步可重新粘贴 SSH 公钥"
-      preflight_add_issue pending "AUTHORIZED_KEYS_FILE 中没有有效公钥；首次执行第 4 步时可重新粘贴公钥"
+      preflight_print_status "PENDING" "AUTHORIZED_KEYS_FILE" "未检测到有效公钥：${AUTHORIZED_KEYS_FILE}；第 5 步可重新粘贴 SSH 公钥"
+      preflight_add_issue pending "AUTHORIZED_KEYS_FILE 中没有有效公钥；首次执行第 5 步时可重新粘贴公钥"
     fi
   fi
 
@@ -358,7 +358,7 @@ run_preflight_checks() {
     if is_true "${CONFIRM_SSH_PORT_CHANGE}"; then
       preflight_print_status "OK" "CONFIRM_SSH_PORT_CHANGE" "已确认非 22 端口切换"
     else
-      preflight_print_status "ERROR" "CONFIRM_SSH_PORT_CHANGE" "SSH_PORT=${SSH_PORT}，但未显式确认端口切换"
+      preflight_print_status "ERROR" "CONFIRM_SSH_PORT_CHANGE" "SSH_PORT=${SSH_PORT}，但未显式确认端口切换；建议先执行第 4 步更改 SSH 端口"
       preflight_add_issue errors "非 22 端口未设置 CONFIRM_SSH_PORT_CHANGE=true"
     fi
   else
