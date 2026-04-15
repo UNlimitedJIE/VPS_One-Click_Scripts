@@ -1087,9 +1087,6 @@ module_completion_state_found() {
     34_ipv6_management)
       [[ -n "$(get_state "NETWORK_IPV6_MANAGED" || true)" ]]
       ;;
-    35_network_tuning_all)
-      [[ -n "$(get_state "NETWORK_TUNING_ALL_DONE" || true)" ]]
-      ;;
     36_network_tuning_status)
       [[ -n "$(get_state "NETWORK_TUNING_STATUS_REVIEWED" || true)" ]]
       ;;
@@ -1326,7 +1323,6 @@ module_prerequisite_conditions_satisfied() {
     32_dns_purification) network_dns_prerequisite_conditions_satisfied ;;
     33_realm_timeout_fix) network_realm_prerequisite_conditions_satisfied ;;
     34_ipv6_management) network_ipv6_prerequisite_conditions_satisfied ;;
-    35_network_tuning_all) network_ipv6_prerequisite_conditions_satisfied ;;
     36_network_tuning_status) network_status_prerequisite_conditions_satisfied ;;
     *)
       return 1

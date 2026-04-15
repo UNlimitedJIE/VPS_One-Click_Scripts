@@ -24,5 +24,4 @@ step_no	module_id	phase	title_zh	short_desc_zh	risk_level	default_enabled	depend
 3	32_dns_purification	network	DNS 净化	按国外/国内模式配置上游 DNS，并在关键步骤失败时自动回滚。	high	false	-	maintenance/network/32_dns_purification.sh	该项会先识别当前 DNS 栈，再按模式写入受控 resolved 配置并验证结果。若任一关键步骤失败，会自动恢复执行前快照。
 4	33_realm_timeout_fix	network	Realm 转发 timeout 修复	检测 Realm 服务与配置文件，修正 timeout/keepalive 相关项并在失败时回滚。	high	false	-	maintenance/network/33_realm_timeout_fix.sh	该项只会在检测到 Realm 后继续执行；它会备份配置、写入修复后的 timeout/keepalive 项、重启服务并做最小校验。
 5	34_ipv6_management	network	IPv6 管理	提供临时禁用、永久禁用、恢复和只读查看 IPv6 状态的交互菜单。	high	false	-	maintenance/network/34_ipv6_management.sh	该项会区分临时禁用、永久禁用与恢复；永久状态通过受控 sysctl 文件维护，只读查看允许普通管理用户执行。
-6	35_network_tuning_all	network	一键执行 1-5	先展示总览，再按顺序执行 1 到 5，任一步失败即停止。	high	false	30_xanmod_bbr3,31_bbr_landing_optimization,32_dns_purification,33_realm_timeout_fix,34_ipv6_management	maintenance/network/35_network_tuning_all.sh	该项不是盲目自动执行。它会先展示总览，再逐步进入各子项自己的交互流程；如果中途某一步失败，会立即停止。
-7	36_network_tuning_status	network	查看当前网络调优状态	只读输出内核/BBR、DNS、Realm、IPv6 等当前状态、依据与是否通过。	low	false	-	maintenance/network/36_network_tuning_status.sh	该项不会修改系统，只会简洁输出当前状态、检测依据和是否通过，适合普通管理用户做快速核对。
+6	36_network_tuning_status	network	查看当前网络调优状态	只读输出内核/BBR、DNS、Realm、IPv6 等当前状态、依据与是否通过。	low	false	-	maintenance/network/36_network_tuning_status.sh	该项不会修改系统，只会简洁输出当前状态、检测依据和是否通过，适合普通管理用户做快速核对。

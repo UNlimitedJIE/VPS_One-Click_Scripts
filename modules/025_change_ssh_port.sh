@@ -130,7 +130,7 @@ confirm_ssh_port_change_risk() {
   while true; do
     if ! ui_prompt_input \
       "确认更改 SSH 端口" \
-      "当前实际 SSH 端口：${current_port}\n目标 SSH 端口：${target_port}\n云厂商安全组 / 云防火墙也必须同步放行新端口。\n若未放行，公网连接可能失败。" \
+      "当前实际 SSH 端口：${current_port}\n目标 SSH 端口：${target_port}\n云厂商安全组 / 云防火墙也必须同步放行新端口。\n若未放行，公网连接可能失败。\n输入 y 继续修改端口。\n输入 0 返回。" \
       ""; then
       return 1
     fi

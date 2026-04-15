@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Module: 10_swap
-# Purpose: 通过显式交互选择 skip / 1G / 2G / 4G / custom。
+# Purpose: 通过显式交互选择虚拟内存（swap）大小。
 # Preconditions: root；Debian 12。
 # Steps:
 #   1. 展示当前 swap 状态
@@ -71,7 +71,7 @@ prompt_swap_selection() {
   local current_swap=""
 
   if is_true "${PLAN_ONLY:-false}" || is_true "${DRY_RUN:-false}"; then
-    log info "[plan] real execution will prompt for swap: skip / 1G / 2G / 4G / custom / 0"
+    log info "[plan] real execution will prompt for virtual memory (swap) size: skip / 1G / 2G / 4G / custom / 0"
     return 1
   fi
 
@@ -83,7 +83,7 @@ prompt_swap_selection() {
   while true; do
     if ! ui_prompt_input \
       "Swap 选择" \
-      "当前 active swap:\n${current_swap}\n\n可选项：\n0 = 返回\nskip = 不启用 swap / 保留现状\n1G = 创建或替换为 1G\n2G = 创建或替换为 2G\n4G = 创建或替换为 4G\ncustom = 输入自定义大小" \
+      "当前 active swap:\n${current_swap}\n\n请选择虚拟内存（swap）大小：\n0 = 返回\nskip = 不启用 swap / 保持当前状态\n1G = 创建或调整 swapfile 为 1GB\n2G = 创建或调整 swapfile 为 2GB\n4G = 创建或调整 swapfile 为 4GB\ncustom = 输入自定义 swapfile 大小" \
       ""; then
       return 1
     fi
