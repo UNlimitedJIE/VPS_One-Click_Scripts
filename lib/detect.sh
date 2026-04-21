@@ -55,6 +55,18 @@ is_debian12() {
   [[ "$(os_id)" == "debian" && "$(os_version_id)" == "12" ]]
 }
 
+is_debian13() {
+  [[ "$(os_id)" == "debian" && "$(os_version_id)" == "13" ]]
+}
+
+is_supported_debian() {
+  is_debian12 || is_debian13
+}
+
+supported_debian_versions_label() {
+  printf '%s\n' "Debian 12/13"
+}
+
 memory_mb() {
   awk '/MemTotal:/ {print int($2/1024)}' /proc/meminfo
 }

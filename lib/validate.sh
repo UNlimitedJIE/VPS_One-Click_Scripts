@@ -20,14 +20,18 @@ require_root() {
   [[ "${EUID}" -eq 0 ]] || die "This script must run as root."
 }
 
-require_debian12() {
+require_supported_debian() {
   if is_true "${PLAN_ONLY:-false}" || is_true "${DRY_RUN:-false}"; then
-    if ! is_debian12; then
-      log warn "Plan/Dry-run mode: skipping strict Debian 12 requirement. Current: $(pretty_os_name 2>/dev/null || echo unknown)"
+    if ! is_supported_debian; then
+      log warn "Plan/Dry-run mode: skipping strict ${supported_debian_versions_label} requirement. Current: $(pretty_os_name 2>/dev/null || echo unknown)"
     fi
     return 0
   fi
-  is_debian12 || die "Target system must be Debian 12. Current: $(pretty_os_name)"
+  is_supported_debian || die "Target system must be Debian 12 or Debian 13. Current: $(pretty_os_name)"
+}
+
+require_debian12() {
+  require_supported_debian
 }
 
 ssh_port_validation_error() {
@@ -287,11 +291,11 @@ run_preflight_checks() {
   preferred_source="$(preferred_authorized_keys_source_path)"
 
   current_os="$(pretty_os_name 2>/dev/null || echo unknown)"
-  if is_debian12; then
+  if is_supported_debian; then
     preflight_print_status "OK" "系统" "已检测到 ${current_os}"
   else
-    preflight_print_status "ERROR" "系统" "要求 Debian 12，当前为 ${current_os}"
-    preflight_add_issue errors "系统不是 Debian 12"
+    preflight_print_status "ERROR" "系统" "要求 Debian 12 或 Debian 13，当前为 ${current_os}"
+    preflight_add_issue errors "系统不是 Debian 12/13"
   fi
 
   current_user="$(id -un 2>/dev/null || echo unknown)"

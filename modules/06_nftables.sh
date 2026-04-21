@@ -58,8 +58,8 @@ table inet filter {
     ip6 nexthdr ipv6-icmp accept
 
     tcp dport ${firewall_ssh_port} accept comment "SSH"
-    # BEGIN VPS EXTRA TCP PORTS
-    # END VPS EXTRA TCP PORTS
+    # BEGIN VPS EXTRA PORTS
+    # END VPS EXTRA PORTS
   }
 
   chain forward {

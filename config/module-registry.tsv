@@ -1,24 +1,25 @@
 step_no	module_id	phase	title_zh	short_desc_zh	risk_level	default_enabled	depends_on	script_path	detail_zh
 1	00_nodequality	init	运行 NodeQuality 基线检测	执行固定的 NodeQuality 命令，对当前 VPS 做基础环境和网络质量检测。	medium	true	-	modules/00_nodequality.sh	该步骤会访问外部地址并运行固定基线命令，用于在初始化前先了解这台 VPS 的网络质量、基础环境和可疑配置情况，方便后续比对。
-2	01_detect_system	init	检查当前系统和机器基础信息	识别当前是否为 Debian 12，并收集主机名、内核、磁盘、内存等基础信息。	low	true	00_nodequality	modules/01_detect_system.sh	该步骤主要做只读检测，确认当前系统版本与基础硬件信息，帮助你判断后续初始化策略是否适配当前机器。
+2	01_detect_system	init	检查当前系统和机器基础信息	识别当前是否为 Debian 12/13，并收集主机名、内核、磁盘、内存等基础信息。	low	true	00_nodequality	modules/01_detect_system.sh	该步骤主要做只读检测，确认当前系统版本与基础硬件信息，帮助你判断后续初始化策略是否适配当前机器。
 3	02_update_base	init	更新系统并安装基础工具	刷新软件包索引、升级系统，并安装后续初始化依赖的基础工具。	medium	true	01_detect_system	modules/02_update_base.sh	该步骤会通过 apt 更新软件包索引，安装基础命令和依赖包，并应用保守型升级，让后续模块运行环境更完整。
 4	025_change_ssh_port	init	更改 SSH 端口	读取 sshd 当前实际端口，安全切换到新端口，并同步项目配置。	high	true	02_update_base	modules/025_change_ssh_port.sh	这是高风险步骤。执行前会明确提示你同步放行云厂商安全组和云防火墙；执行时会先做输入校验，再用受控 SSH 配置块唯一写入 Port，校验 sshd -t、reload 和 sshd -T，最后把 SSH_PORT 持久化到 config/local.conf。
 5	03_admin_access_stage	init	创建并配置管理用户接入	按顺序完成管理用户创建、SSH 公钥配置和 SSH 接入准备。	high	true	025_change_ssh_port	modules/03_admin_access_stage.sh	这是一个连续阶段，会依次执行创建管理用户、写入 authorized_keys 和 SSH 接入准备。该阶段结束后会明确提示你使用“管理用户 + SSH 公钥”先在新窗口验证连接；root 远程登录此时仍保留，第 6 步才会正式关闭。
 6	07_switch_admin_login	init	关闭 root 远程登录并切换为管理用户登录	在确认管理用户 SSH 公钥登录可用后，关闭 root 远程 SSH 登录。	high	true	03_admin_access_stage	modules/07_switch_admin_login.sh	这是明确的切换步骤。执行前会检查管理用户、公钥、sshd 语法和当前 SSH 端口，并要求你再次确认已在新窗口验证管理用户可登录；若修改了 SSH 端口，还必须确认云厂商安全组/云防火墙已同步放行。
 7	06_nftables	init	启用 nftables 防火墙并只放行必要端口	生成并启用基础防火墙规则，默认只允许 SSH 端口进入。	high	true	07_switch_admin_login	modules/06_nftables.sh	这是高风险步骤。它会将入站默认策略收紧为 drop，并只保留当前生效 SSH 端口；如果云防火墙、安全组和 SSH 端口未同步，可能导致无法连接。
 8	07_time_sync	init	配置时区和自动时间同步	设置系统时区，并启用 systemd-timesyncd 进行自动校时。	low	true	02_update_base	modules/07_time_sync.sh	该步骤会统一系统时间基础设置，减少日志时间漂移、证书校验异常和计划任务错时的问题。
-9	08_auto_updates	init	启用自动安全更新	安装并配置 unattended-upgrades，让系统自动安装安全更新。	medium	true	02_update_base	modules/08_auto_updates.sh	该步骤会启用 Debian 12 常见的自动安全更新机制，适合长期在线的 VPS，但你仍应保留定期人工审查。
+9	08_auto_updates	init	启用自动安全更新	安装并配置 unattended-upgrades，让系统自动安装安全更新。	medium	true	02_update_base	modules/08_auto_updates.sh	该步骤会启用 Debian 12/13 常见的自动安全更新机制，适合长期在线的 VPS，但你仍应保留定期人工审查。
 10	09_fail2ban	init	启用 Fail2Ban 防暴力破解	监控 SSH 登录失败记录，对多次尝试错误密码的来源进行临时封禁。	medium	true	03_admin_access_stage	modules/09_fail2ban.sh	该步骤会基于 SSH 日志做基础暴力破解防护，适合作为防火墙之外的第二层登录保护措施。
 11	10_swap	init	显式选择并配置 swap	通过交互选择 skip / 1G / 2G / 4G / custom，并据此创建、保留或替换 /swapfile。	medium	true	02_update_base	modules/10_swap.sh	该步骤不再按内存自动决定，而是要求你显式选择 swap 方案，然后输出 /swapfile、swapon --show 和 /etc/fstab 的实际结果，避免“脚本替你猜”。
 12	11_verify	init	验收第 2-11 步的实际结果	直接检查系统真实状态、配置文件、服务状态和 SSH/登录日志，解释当前为什么会是这样。	low	true	025_change_ssh_port,03_admin_access_stage,07_switch_admin_login,06_nftables,07_time_sync,08_auto_updates,09_fail2ban,10_swap	modules/11_verify.sh	该步骤是初始化收口验收，不再只看 state。它会分项输出 Current / Expected / Evidence / Conclusion，并把原本的摘要提醒一并合并进来。
 1	20_update_system	maintain	定期更新系统软件	刷新索引、安装系统更新，并清理不再需要的软件包。	medium	true	-	maintenance/20_update_system.sh	适合定期执行的保守型系统维护动作，用于减少系统落后版本积压，保持基础软件包处于较新状态。
 2	21_audit_users_ssh	maintain	审查用户、sudo 和 SSH 密钥	检查交互式用户、sudo 成员以及各用户 authorized_keys 情况。	medium	true	-	maintenance/21_audit_users_ssh.sh	该任务用于发现多余账号、遗留 sudo 权限和未审查的 SSH 公钥，适合在人员或运维方式发生变化后重点检查。
 3	22_audit_firewall	maintain	端口管理与防火墙检查	查看当前监听端口与 nftables 规则，并在菜单中进入开放/关闭端口操作。	medium	true	-	maintenance/22_audit_firewall.sh	该入口会先帮助你核对当前监听端口和 nftables 规则；在菜单交互里还可以继续做开放/关闭端口操作。这里修改的只是服务器内部防火墙，若云厂商还有安全组或云防火墙，也必须同步放行或关闭，否则公网访问结果可能与本机规则不一致。
-4	23_audit_fail2ban_logs	maintain	检查 Fail2Ban 与登录日志	查看 Fail2Ban 状态和近期 SSH 登录失败情况。	medium	true	-	maintenance/23_audit_fail2ban_logs.sh	该任务用于判断最近是否存在异常登录尝试、误封、封禁效果不明显等情况，是 SSH 风险巡检的重要组成部分。
-5	24_monitor_basic	maintain	查看基础资源与服务健康	查看 CPU、内存、磁盘、网络套接字和失败的 systemd 服务。	low	true	-	maintenance/24_monitor_basic.sh	该任务用于快速了解机器的基本健康度，适合排查“机器卡顿”“磁盘满了”“服务异常退出”等常见问题。
-6	25_cleanup	maintain	清理日志和缓存	清理 apt 缓存、无用软件包和过旧 journal 日志。	low	true	20_update_system	maintenance/25_cleanup.sh	该任务用于减少无用占用，尤其适合磁盘较小的 VPS，但不会对业务数据目录做破坏性删除。
-7	26_backup_check	maintain	检查备份与恢复准备情况	检查常见备份工具、相关定时器和近期备份痕迹，并提醒做恢复演练。	medium	true	-	maintenance/26_backup_check.sh	该任务不会直接调用云厂商 API，也不会自动恢复数据；重点是提醒你验证“有没有备份”和“能不能真正恢复”。
-8	28_change_log	maintain	记录本次维护状态	把关键运行状态追加到变更记录中，方便后续追溯。	low	true	-	maintenance/28_change_log.sh	该任务会把当前系统的一些关键维护状态记录到 state/change-log.tsv，方便做长期对比和问题回溯。
+4	27_common_scripts	maintain	常用脚本检测	查看常用测试/测速/回程/安装脚本清单，并在菜单中进入交互执行子菜单。	high	true	-	maintenance/27_common_scripts.sh	该入口会先保留常用脚本清单，便于你在 show/plan/顺序执行时核对；在维护菜单输入 4 时会进入交互子菜单，可直接执行第三方远程脚本。由于这些脚本会从公网下载内容并可能修改系统，请自行判断风险。
+5	23_audit_fail2ban_logs	maintain	检查 Fail2Ban 与登录日志	查看 Fail2Ban 状态和近期 SSH 登录失败情况。	medium	true	-	maintenance/23_audit_fail2ban_logs.sh	该任务用于判断最近是否存在异常登录尝试、误封、封禁效果不明显等情况，是 SSH 风险巡检的重要组成部分。
+6	24_monitor_basic	maintain	查看基础资源与服务健康	查看 CPU、内存、磁盘、网络套接字和失败的 systemd 服务。	low	true	-	maintenance/24_monitor_basic.sh	该任务用于快速了解机器的基本健康度，适合排查“机器卡顿”“磁盘满了”“服务异常退出”等常见问题。
+7	25_cleanup	maintain	清理日志和缓存	清理 apt 缓存、无用软件包和过旧 journal 日志。	low	true	20_update_system	maintenance/25_cleanup.sh	该任务用于减少无用占用，尤其适合磁盘较小的 VPS，但不会对业务数据目录做破坏性删除。
+8	26_backup_check	maintain	检查备份与恢复准备情况	检查常见备份工具、相关定时器和近期备份痕迹，并提醒做恢复演练。	medium	true	-	maintenance/26_backup_check.sh	该任务不会直接调用云厂商 API，也不会自动恢复数据；重点是提醒你验证“有没有备份”和“能不能真正恢复”。
+9	28_change_log	maintain	记录本次维护状态	把关键运行状态追加到变更记录中，方便后续追溯。	low	true	-	maintenance/28_change_log.sh	该任务会把当前系统的一些关键维护状态记录到 state/change-log.tsv，方便做长期对比和问题回溯。
 1	30_xanmod_bbr3	network	安装/更新 XanMod 内核 + BBR v3	检测当前内核、XanMod 状态与 BBR 能力，并在需要时安装或更新 XanMod 内核包。	high	false	-	maintenance/network/30_xanmod_bbr3.sh	该项会配置 XanMod 官方 APT 仓库并安装对应内核包。它不会自动重启，但会明确告诉你当前是否需要重启才能切换到新内核。
 2	31_bbr_landing_optimization	network	BBR 直连/落地优化	按测速/手动带宽和地区档位计算缓冲区，写入独立 sysctl，并持久化恢复 fq。	high	false	30_xanmod_bbr3	maintenance/network/31_bbr_landing_optimization.sh	该项会要求当前内核支持 bbr，然后写入独立 sysctl drop-in、应用 fq + bbr，并创建持久化恢复 fq 的 systemd 服务。
 3	32_dns_purification	network	DNS 净化	按国外/国内模式配置上游 DNS，并在关键步骤失败时自动回滚。	high	false	-	maintenance/network/32_dns_purification.sh	该项会先识别当前 DNS 栈，再按模式写入受控 resolved 配置并验证结果。若任一关键步骤失败，会自动恢复执行前快照。

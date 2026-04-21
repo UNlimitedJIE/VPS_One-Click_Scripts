@@ -296,6 +296,7 @@ ui_wait_for_enter() {
   ui_print_raw "${prompt}"
   ui_flush_output || true
   ui_read_line || return 1
+  ui_clear_screen || true
   return 0
 }
 
@@ -348,13 +349,16 @@ ui_choose_phase() {
 
   while true; do
     ui_clear_screen || true
-    ui_print_raw $'\nVPS 初始化与维护根菜单\n\n'
+    ui_print_raw $'\n==============================\n'
+    ui_print_raw $'VPS 初始化与维护根菜单\n'
+    ui_print_raw $'==============================\n\n'
     ui_print_raw $'1. 初始化菜单\n'
     ui_print_raw $'   进入初始化菜单，按数字执行各阶段。\n'
     ui_print_raw $'2. 长期维护菜单\n'
     ui_print_raw $'   进入长期维护菜单，处理更新、巡检、端口管理等日常维护。\n'
     ui_print_raw $'3. 网络调优\n'
     ui_print_raw $'   进入网络调优子菜单。\n'
+    ui_print_raw $'\n快捷操作：\n'
     ui_print_raw $'0. 退出程序\n\n'
     ui_print_raw "请输入编号："
     ui_read_line || return 1

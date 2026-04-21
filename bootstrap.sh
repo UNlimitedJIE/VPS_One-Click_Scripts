@@ -28,7 +28,7 @@ Usage:
 Menu shortcuts:
   Root menu: 0 = 退出程序
   Any submenu: 0 = 返回上一级菜单
-  Maintain menu: 9 = 顺序执行 1 到 8
+  Maintain menu: 10 = 顺序执行 1 到 9
   Network menu: 0 = 返回上一级菜单
 
 Menu purpose:
@@ -1030,11 +1030,11 @@ confirm_terminal_yes() {
 }
 
 build_maintain_main_sequence() {
-  build_phase_sequence_by_numeric_range "maintain" "1" "8"
+  build_phase_sequence_by_numeric_range "maintain" "1" "9"
 }
 
 render_init_menu_prompt() {
-  local header=""
+  local header=$'可执行项目：\n'
   local line=""
   local step_no module_id entry_phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh
 
@@ -1048,6 +1048,7 @@ render_init_menu_prompt() {
     header+="   ${short_desc_zh}"$'\n'
   done < <(registry_lines "init")
 
+  header+=$'\n快捷操作：\n'
   header+=$'0. 返回上一级菜单\n\n'
   header+=$'输入规则：\n'
   header+=$'- 输入单个数字，例如 6，直接执行第 6 步\n'
@@ -1057,7 +1058,7 @@ render_init_menu_prompt() {
 }
 
 render_maintain_menu_prompt() {
-  local header=""
+  local header=$'可执行项目：\n'
   local line=""
   local step_no module_id entry_phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh
 
@@ -1071,20 +1072,22 @@ render_maintain_menu_prompt() {
     header+="   ${short_desc_zh}"$'\n'
   done < <(registry_lines "maintain")
 
-  header+=$'9. 顺序执行 1 到 8\n'
-  header+=$'   先展示 1 到 8 的清单，确认后按顺序执行。\n'
+  header+=$'\n快捷操作：\n'
+  header+=$'10. 顺序执行 1 到 9\n'
+  header+=$'    先展示 1 到 9 的清单，确认后按顺序执行。\n'
   header+=$'0. 返回上一级菜单\n\n'
   header+=$'输入规则：\n'
   header+=$'- 输入单个数字直接执行对应项目\n'
   header+=$'- 输入 3，进入端口管理子菜单；顺序执行时第 3 项只做查看，不进入子菜单\n'
+  header+=$'- 输入 4，进入常用脚本检测子菜单；顺序执行时第 4 项只显示清单，不自动执行外部脚本\n'
   header+=$'- 输入多个数字，例如 1,2,3，按输入顺序执行这些项目\n'
-  header+=$'- 输入 9，顺序执行 1 到 8\n'
+  header+=$'- 输入 10，顺序执行 1 到 9\n'
 
   printf '%s' "${header}"
 }
 
 render_network_menu_prompt() {
-  local header=""
+  local header=$'可执行项目：\n'
   local line=""
   local step_no module_id entry_phase title_zh short_desc_zh risk_level default_enabled depends_on script_path detail_zh
 
@@ -1098,6 +1101,7 @@ render_network_menu_prompt() {
     header+="   ${short_desc_zh}"$'\n'
   done < <(registry_lines "network")
 
+  header+=$'\n快捷操作：\n'
   header+=$'0. 返回上一级菜单\n\n'
   header+=$'输入规则：\n'
   header+=$'- 输入单个数字直接执行对应项目\n'
@@ -1143,6 +1147,15 @@ normalize_port_input_list_safe() {
   normalize_numeric_port_list "${normalized_ports[@]}"
 }
 
+port_protocol_label_zh() {
+  case "${1:-}" in
+    tcp) printf '%s\n' "TCP" ;;
+    udp) printf '%s\n' "UDP" ;;
+    tcp_udp) printf '%s\n' "TCP+UDP" ;;
+    *) printf '%s\n' "未知协议" ;;
+  esac
+}
+
 port_management_notice_text() {
   cat <<'EOF'
 注意：
@@ -1164,6 +1177,7 @@ render_port_management_prompt() {
 
 输入规则：
 - 输入 1 查看当前监听端口和 nftables 规则
+- 输入 2/3/4/5 后会继续让你选择协议（TCP、UDP 或 TCP+UDP）
 - 输入 2/3 对单个端口做开放或关闭
 - 输入 4/5 可输入多个端口，例如 80,443
 - 所有开放/关闭动作都只修改本机 nftables，云厂商安全组/云防火墙也必须同步处理
@@ -1178,6 +1192,43 @@ prompt_port_management_input() {
 run_port_management_overview() {
   printf '\n%s\n\n' "$(port_management_notice_text)"
   run_script_path "${PROJECT_ROOT}/maintenance/22_audit_firewall.sh"
+}
+
+prompt_port_management_protocol() {
+  local title="$1"
+  local choice=""
+
+  while true; do
+    if ! ui_prompt_input "${title}" $'请选择协议：\n1. TCP\n2. UDP\n3. TCP+UDP\n0. 返回上一步'; then
+      return 1
+    fi
+
+    choice="$(ui_trim_value "${UI_LAST_INPUT}")"
+    case "${choice}" in
+      0)
+        return 1
+        ;;
+      1)
+        printf '%s\n' "tcp"
+        return 0
+        ;;
+      2)
+        printf '%s\n' "udp"
+        return 0
+        ;;
+      3)
+        printf '%s\n' "tcp_udp"
+        return 0
+        ;;
+      *)
+        ui_warn_message "输入无效" "只支持输入 1、2、3 或 0。"
+        ;;
+    esac
+  done
+}
+
+run_common_scripts_menu() {
+  COMMON_SCRIPTS_MENU_MODE="interactive" bash "${PROJECT_ROOT}/maintenance/27_common_scripts.sh"
 }
 
 prompt_port_list_for_management() {
@@ -1220,10 +1271,13 @@ prompt_port_list_for_management() {
 
 confirm_port_management_change() {
   local title="$1"
-  shift || true
+  local proto="$2"
+  shift 2 || true
+  local proto_label=""
   local ports_text=""
   local port=""
 
+  proto_label="$(port_protocol_label_zh "${proto}")"
   for port in "$@"; do
     if [[ -n "${ports_text}" ]]; then
       ports_text+=", "
@@ -1231,7 +1285,7 @@ confirm_port_management_change() {
     ports_text+="${port}"
   done
 
-  ui_confirm_with_back "${title}" "$(port_management_notice_text)\n\n目标端口：${ports_text}"
+  ui_confirm_with_back "${title}" "$(port_management_notice_text)\n\n协议：${proto_label}\n目标端口：${ports_text}"
 }
 
 menu_port_management_phase() {
@@ -1250,32 +1304,44 @@ menu_port_management_phase() {
         menu_execute_with_feedback "查看当前监听端口与 nftables 规则" run_port_management_overview || true
         ;;
       2)
+        local proto=""
         local ports=()
+        proto="$(prompt_port_management_protocol "开放一个端口" || true)"
+        [[ -n "${proto}" ]] || continue
         mapfile -t ports < <(prompt_port_list_for_management "开放一个端口" "请输入要开放的端口号：" "false" || true)
         ((${#ports[@]} > 0)) || continue
-        confirm_port_management_change "确认开放端口" "${ports[@]}" || continue
-        menu_execute_with_feedback "开放端口 ${ports[0]}" nftables_open_tcp_ports "${ports[@]}" || true
+        confirm_port_management_change "确认开放端口" "${proto}" "${ports[@]}" || continue
+        menu_execute_with_feedback "开放 $(port_protocol_label_zh "${proto}") 端口 ${ports[0]}" nftables_open_ports_by_proto "${proto}" "${ports[@]}" || true
         ;;
       3)
+        local proto=""
         local ports=()
+        proto="$(prompt_port_management_protocol "关闭一个端口" || true)"
+        [[ -n "${proto}" ]] || continue
         mapfile -t ports < <(prompt_port_list_for_management "关闭一个端口" "请输入要关闭的端口号：" "false" || true)
         ((${#ports[@]} > 0)) || continue
-        confirm_port_management_change "确认关闭端口" "${ports[@]}" || continue
-        menu_execute_with_feedback "关闭端口 ${ports[0]}" nftables_close_tcp_ports "${ports[@]}" || true
+        confirm_port_management_change "确认关闭端口" "${proto}" "${ports[@]}" || continue
+        menu_execute_with_feedback "关闭 $(port_protocol_label_zh "${proto}") 端口 ${ports[0]}" nftables_close_ports_by_proto "${proto}" "${ports[@]}" || true
         ;;
       4)
+        local proto=""
         local ports=()
+        proto="$(prompt_port_management_protocol "批量开放端口" || true)"
+        [[ -n "${proto}" ]] || continue
         mapfile -t ports < <(prompt_port_list_for_management "批量开放端口" "请输入要批量开放的端口，多个端口可用逗号分隔，例如 80,443：" "true" || true)
         ((${#ports[@]} > 0)) || continue
-        confirm_port_management_change "确认批量开放端口" "${ports[@]}" || continue
-        menu_execute_with_feedback "批量开放端口" nftables_open_tcp_ports "${ports[@]}" || true
+        confirm_port_management_change "确认批量开放端口" "${proto}" "${ports[@]}" || continue
+        menu_execute_with_feedback "批量开放 $(port_protocol_label_zh "${proto}") 端口" nftables_open_ports_by_proto "${proto}" "${ports[@]}" || true
         ;;
       5)
+        local proto=""
         local ports=()
+        proto="$(prompt_port_management_protocol "批量关闭端口" || true)"
+        [[ -n "${proto}" ]] || continue
         mapfile -t ports < <(prompt_port_list_for_management "批量关闭端口" "请输入要批量关闭的端口，多个端口可用逗号分隔，例如 80,443：" "true" || true)
         ((${#ports[@]} > 0)) || continue
-        confirm_port_management_change "确认批量关闭端口" "${ports[@]}" || continue
-        menu_execute_with_feedback "批量关闭端口" nftables_close_tcp_ports "${ports[@]}" || true
+        confirm_port_management_change "确认批量关闭端口" "${proto}" "${ports[@]}" || continue
+        menu_execute_with_feedback "批量关闭 $(port_protocol_label_zh "${proto}") 端口" nftables_close_ports_by_proto "${proto}" "${ports[@]}" || true
         ;;
       6)
         ui_confirm_with_back "确认重载 nftables" "$(port_management_notice_text)\n\n即将重新校验并加载 /etc/nftables.conf。" || continue
@@ -1292,7 +1358,7 @@ confirm_maintain_sequence() {
   local sequence_ids=("$@")
   local summary=""
   summary="$(render_execution_summary "maintain" "${sequence_ids[@]}")"
-  ui_confirm_with_back "确认顺序执行 1 到 8" "你将按顺序执行以下长期维护项目：\n\n${summary}"
+  ui_confirm_with_back "确认顺序执行 1 到 9" "你将按顺序执行以下长期维护项目：\n\n${summary}"
 }
 
 resolve_network_selection_token() {
@@ -1493,7 +1559,7 @@ menu_maintain_phase() {
     raw_input="$(ui_trim_value "${UI_LAST_INPUT}")"
 
     if [[ -z "${raw_input}" ]]; then
-      ui_warn_message "输入为空" "请输入维护编号，例如 1、1,2,3 或 9。"
+      ui_warn_message "输入为空" "请输入维护编号，例如 1、1,2,3 或 10。"
       continue
     fi
 
@@ -1505,11 +1571,15 @@ menu_maintain_phase() {
         menu_port_management_phase
         continue
         ;;
-      9)
+      4)
+        run_common_scripts_menu || true
+        continue
+        ;;
+      10)
         local sequence_ids=()
         local sequence_summary=""
         mapfile -t sequence_ids < <(build_maintain_main_sequence)
-        ((${#sequence_ids[@]} > 0)) || die "No maintain modules found for steps 1 to 8."
+        ((${#sequence_ids[@]} > 0)) || die "No maintain modules found for steps 1 to 9."
         confirm_maintain_sequence "${sequence_ids[@]}" || continue
         sequence_summary="$(menu_action_summary "maintain" "${sequence_ids[@]}")"
         menu_execute_with_feedback "${sequence_summary}" run_phase_from_registry "maintain" "menu" "${sequence_ids[@]}" || true
@@ -1537,8 +1607,8 @@ menu_maintain_phase() {
       continue
     fi
 
-    if selection_contains "3" "${raw_tokens[@]}" || selection_contains "9" "${raw_tokens[@]}"; then
-      ui_warn_message "输入无效" "3 和 9 是特殊入口，请单独输入。"
+    if selection_contains "3" "${raw_tokens[@]}" || selection_contains "4" "${raw_tokens[@]}" || selection_contains "10" "${raw_tokens[@]}"; then
+      ui_warn_message "输入无效" "3、4 和 10 是特殊入口，请单独输入。"
       continue
     fi
 
