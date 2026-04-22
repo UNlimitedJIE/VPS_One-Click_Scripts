@@ -42,24 +42,36 @@
 
 ## 快速开始
 
-克隆项目并进入目录：
+首次安装并直接进入菜单：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/UNlimitedJIE/VPS_One-Click_Scripts/main/install.sh)
+```
+
+如果系统没有 `curl`，也可以改用：
+
+```bash
+bash <(wget -qO- https://raw.githubusercontent.com/UNlimitedJIE/VPS_One-Click_Scripts/main/install.sh)
+```
+
+如果你当前不是 root，请改用：
+
+```bash
+sudo bash <(curl -fsSL https://raw.githubusercontent.com/UNlimitedJIE/VPS_One-Click_Scripts/main/install.sh)
+```
+
+说明：
+
+- 首次执行会自动安装 `git`、拉取或更新到 `/opt/VPS_One-Click_Scripts`、安装 `j`，然后直接进入菜单
+- 以后再次打开，只需要输入 `j`
+
+如果你想手动克隆后再进入目录，也可以：
 
 ```bash
 git clone https://github.com/UNlimitedJIE/VPS_One-Click_Scripts.git
 cd VPS_One-Click_Scripts
-```
-
-安装快捷命令 `j`，然后进入菜单：
-
-```bash
 sudo bash bootstrap.sh install-shortcut
 j
-```
-
-如果不安装快捷命令，也可以直接运行：
-
-```bash
-bash bootstrap.sh menu
 ```
 
 常用入口：
