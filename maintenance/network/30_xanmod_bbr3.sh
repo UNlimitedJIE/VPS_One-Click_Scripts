@@ -30,6 +30,44 @@ refresh_xanmod_apt_index() {
     env DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none UCF_FORCE_CONFFOLD=1 LC_ALL=C LANG=C apt-get update
 }
 
+xanmod_direct_kernel_packages_from_meta() {
+  local meta_package="${1:-}"
+
+  [[ -n "${meta_package}" ]] || return 1
+  command_exists apt-cache || return 1
+
+  apt-cache depends "${meta_package}" 2>/dev/null \
+    | awk '/^[[:space:]]*Depends:/ {print $2}' \
+    | grep -E '^linux-(image|headers)-.*xanmod' \
+    | awk 'NF && !seen[$0]++'
+}
+
+install_selected_xanmod_package() {
+  local meta_package="${1:-}"
+  local -a direct_packages=()
+
+  [[ -n "${meta_package}" ]] || return 1
+
+  XANMOD_INSTALL_MODE="meta"
+  XANMOD_INSTALL_TARGETS="${meta_package}"
+
+  if apt_install_packages "${meta_package}"; then
+    return 0
+  fi
+
+  log warn "Installing XanMod meta package ${meta_package} failed."
+  log warn "This often means the repository metadata is briefly ahead of the tiny meta package file."
+
+  refresh_xanmod_apt_index || true
+  mapfile -t direct_packages < <(xanmod_direct_kernel_packages_from_meta "${meta_package}" || true)
+  ((${#direct_packages[@]} > 0)) || die "无法从 ${meta_package} 解析出可直接安装的 XanMod image/headers 包。请稍后重试。"
+
+  XANMOD_INSTALL_MODE="direct-fallback"
+  XANMOD_INSTALL_TARGETS="$(printf '%s\n' "${direct_packages[@]}" | paste -sd ',' - | sed 's/,/, /g')"
+  log info "Retrying XanMod install with direct packages: ${direct_packages[*]}"
+  apt_install_packages "${direct_packages[@]}"
+}
+
 main() {
   load_config
   init_runtime
@@ -47,6 +85,8 @@ main() {
   local installed_kernel=""
   local reboot_required="no"
   local report=""
+  local install_mode=""
+  local install_targets=""
 
   current_kernel="$(network_tuning_current_kernel)"
   network_tuning_kernel_is_xanmod && xanmod_state="yes"
@@ -76,7 +116,11 @@ main() {
     die "当前仓库未提供适合该机器的 XanMod 包。"
   fi
 
-  apt_install_packages "${package_name}"
+  XANMOD_INSTALL_MODE=""
+  XANMOD_INSTALL_TARGETS=""
+  install_selected_xanmod_package "${package_name}"
+  install_mode="${XANMOD_INSTALL_MODE:-meta}"
+  install_targets="${XANMOD_INSTALL_TARGETS:-${package_name}}"
 
   installed_kernel="$(network_tuning_highest_installed_xanmod_kernel || true)"
   if network_tuning_reboot_required_for_xanmod; then
@@ -85,12 +129,14 @@ main() {
 
   report="$(readonly_status_block \
     "XanMod 内核与 BBR 能力" \
-    "kernel=${current_kernel}; xanmod_running=${xanmod_state}; bbr=${bbr_state}; bbr3=${bbr3_state}; selected_package=${package_name}; reboot_required=${reboot_required}" \
-    "candidates=${candidate_packages:-none}; available=${available_packages:-none}; installed=${installed_kernel:-not found}" \
+    "kernel=${current_kernel}; xanmod_running=${xanmod_state}; bbr=${bbr_state}; bbr3=${bbr3_state}; selected_package=${package_name}; install_mode=${install_mode}; reboot_required=${reboot_required}" \
+    "candidates=${candidate_packages:-none}; available=${available_packages:-none}; install_targets=${install_targets}; installed=${installed_kernel:-not found}" \
     "yes")"
   log info "${report}"
 
   set_state "NETWORK_XANMOD_PACKAGE" "${package_name}"
+  set_state "NETWORK_XANMOD_INSTALL_MODE" "${install_mode}"
+  set_state "NETWORK_XANMOD_INSTALL_TARGETS" "${install_targets}"
   set_state "NETWORK_XANMOD_KERNEL_DONE" "yes"
   set_state "NETWORK_XANMOD_REBOOT_REQUIRED" "${reboot_required}"
 }
