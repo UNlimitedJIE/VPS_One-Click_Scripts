@@ -48,6 +48,12 @@
 bash <(curl -fsSL https://raw.githubusercontent.com/UNlimitedJIE/VPS_One-Click_Scripts/main/install.sh)
 ```
 
+前置说明：
+
+- 不需要先手动执行 `apt update && apt install -y git`；安装脚本会自动安装 `git`
+- 只要系统里有 `curl` 或 `wget` 其中一个，就能直接使用上面的安装命令
+- 如果系统里连 `curl` 和 `wget` 都没有，再先执行 `apt update && apt install -y curl`
+
 如果系统没有 `curl`，也可以改用：
 
 ```bash
