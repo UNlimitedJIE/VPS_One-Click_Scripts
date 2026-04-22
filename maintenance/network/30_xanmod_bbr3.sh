@@ -55,8 +55,8 @@ install_selected_xanmod_package() {
     return 0
   fi
 
-  log warn "Installing XanMod meta package ${meta_package} failed."
-  log warn "This often means the repository metadata is briefly ahead of the tiny meta package file."
+  log info "XanMod 元包 ${meta_package} 当前不可下载，准备自动切换为直接安装内核与 headers 包。"
+  log info "这通常是仓库索引已更新、元包文件尚未同步；若直接包可用，则不会影响本次安装。"
 
   refresh_xanmod_apt_index || true
   mapfile -t direct_packages < <(xanmod_direct_kernel_packages_from_meta "${meta_package}" || true)
