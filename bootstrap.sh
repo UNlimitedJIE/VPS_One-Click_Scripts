@@ -28,7 +28,7 @@ Usage:
 Menu shortcuts:
   Root menu: 0 = 退出程序
   Any submenu: 0 = 返回上一级菜单, 99 = 退出脚本
-  Maintain menu: 10 = 顺序执行 1 到 9
+  Maintain menu: 9 = 顺序执行 1 到 8
   Network menu: 0 = 返回上一级菜单, 99 = 退出脚本
 
 Menu purpose:
@@ -37,7 +37,7 @@ Menu purpose:
   plan = 预演输出
 
 Init note:
-  初始化流程现在收口到第 12 步验收
+  初始化流程现在收口到第 11 步验收
   summary 阶段已并入 11_verify 并从菜单移除
 
 Examples:
@@ -138,8 +138,7 @@ resolve_module_path() {
   for candidate in \
     "${PROJECT_ROOT}/modules/${normalized}" \
     "${PROJECT_ROOT}/maintenance/${normalized}" \
-    "${PROJECT_ROOT}/maintenance/network/${normalized}" \
-    "${PROJECT_ROOT}/roles/${normalized}"
+    "${PROJECT_ROOT}/maintenance/network/${normalized}"
   do
     if [[ -f "${candidate}" ]]; then
       printf '%s\n' "${candidate}"
@@ -963,7 +962,7 @@ build_phase_sequence_by_numeric_range() {
 
 build_init_sequence_to_step() {
   local target_step="$1"
-  build_phase_sequence_by_numeric_range "init" "2" "${target_step}"
+  build_phase_sequence_by_numeric_range "init" "1" "${target_step}"
 }
 
 resolve_init_step_selection() {
@@ -1033,7 +1032,7 @@ confirm_terminal_yes() {
 }
 
 build_maintain_main_sequence() {
-  build_phase_sequence_by_numeric_range "maintain" "1" "9"
+  build_phase_sequence_by_numeric_range "maintain" "1" "8"
 }
 
 render_init_menu_prompt() {
@@ -1077,16 +1076,15 @@ render_maintain_menu_prompt() {
   done < <(registry_lines "maintain")
 
   header+=$'\n快捷操作：\n'
-  header+=$'10. 顺序执行 1 到 9\n'
-  header+=$'    先展示 1 到 9 的清单，确认后按顺序执行。\n'
+  header+=$'9. 顺序执行 1 到 8\n'
+  header+=$'    先展示 1 到 8 的清单，确认后按顺序执行。\n'
   header+=$'0. 返回上一级菜单\n\n'
   header+=$'99. 退出脚本\n\n'
   header+=$'输入规则：\n'
   header+=$'- 输入单个数字直接执行对应项目\n'
   header+=$'- 输入 3，进入端口管理子菜单；顺序执行时第 3 项只做查看，不进入子菜单\n'
-  header+=$'- 输入 4，进入常用脚本检测子菜单；顺序执行时第 4 项只显示清单，不自动执行外部脚本\n'
   header+=$'- 输入多个数字，例如 1,2,3，按输入顺序执行这些项目\n'
-  header+=$'- 输入 10，顺序执行 1 到 9\n'
+  header+=$'- 输入 9，顺序执行 1 到 8\n'
 
   printf '%s' "${header}"
 }
@@ -1237,10 +1235,6 @@ prompt_port_management_protocol() {
   done
 }
 
-run_common_scripts_menu() {
-  COMMON_SCRIPTS_MENU_MODE="interactive" bash "${PROJECT_ROOT}/maintenance/27_common_scripts.sh"
-}
-
 prompt_port_list_for_management() {
   local title="$1"
   local prompt="$2"
@@ -1371,7 +1365,7 @@ confirm_maintain_sequence() {
   local sequence_ids=("$@")
   local summary=""
   summary="$(render_execution_summary "maintain" "${sequence_ids[@]}")"
-  ui_confirm_with_back "确认顺序执行 1 到 9" "你将按顺序执行以下长期维护项目：\n\n${summary}"
+  ui_confirm_with_back "确认顺序执行 1 到 8" "你将按顺序执行以下长期维护项目：\n\n${summary}"
 }
 
 resolve_network_selection_token() {
@@ -1586,7 +1580,7 @@ menu_maintain_phase() {
     raw_input="$(ui_trim_value "${UI_LAST_INPUT}")"
 
     if [[ -z "${raw_input}" ]]; then
-      ui_warn_message "输入为空" "请输入维护编号，例如 1、1,2,3 或 10。"
+      ui_warn_message "输入为空" "请输入维护编号，例如 1、1,2,3 或 9。"
       continue
     fi
 
@@ -1601,15 +1595,11 @@ menu_maintain_phase() {
         menu_port_management_phase
         continue
         ;;
-      4)
-        run_common_scripts_menu || true
-        continue
-        ;;
-      10)
+      9)
         local sequence_ids=()
         local sequence_summary=""
         mapfile -t sequence_ids < <(build_maintain_main_sequence)
-        ((${#sequence_ids[@]} > 0)) || die "No maintain modules found for steps 1 to 9."
+        ((${#sequence_ids[@]} > 0)) || die "No maintain modules found for steps 1 to 8."
         confirm_maintain_sequence "${sequence_ids[@]}" || continue
         sequence_summary="$(menu_action_summary "maintain" "${sequence_ids[@]}")"
         menu_execute_with_feedback "${sequence_summary}" run_phase_from_registry "maintain" "menu" "${sequence_ids[@]}" || true
@@ -1641,8 +1631,8 @@ menu_maintain_phase() {
       continue
     fi
 
-    if selection_contains "3" "${raw_tokens[@]}" || selection_contains "4" "${raw_tokens[@]}" || selection_contains "10" "${raw_tokens[@]}"; then
-      ui_warn_message "输入无效" "3、4 和 10 是特殊入口，请单独输入。"
+    if selection_contains "3" "${raw_tokens[@]}" || selection_contains "9" "${raw_tokens[@]}"; then
+      ui_warn_message "输入无效" "3 和 9 是特殊入口，请单独输入。"
       continue
     fi
 
@@ -1809,10 +1799,10 @@ main() {
       local max_step=""
       local target_step=0
       max_step="$(max_init_step_number)"
-      [[ "${BOOTSTRAP_TARGET}" =~ ^[0-9]+$ ]] || die "stepseq target must be a number between 2 and ${max_step}."
+      [[ "${BOOTSTRAP_TARGET}" =~ ^[0-9]+$ ]] || die "stepseq target must be a number between 1 and ${max_step}."
       target_step=$((10#${BOOTSTRAP_TARGET}))
-      if (( target_step < 2 || target_step > max_step )); then
-        die "stepseq target must be between 2 and ${max_step}."
+      if (( target_step < 1 || target_step > max_step )); then
+        die "stepseq target must be between 1 and ${max_step}."
       fi
 
       local sequence_ids=()
@@ -1821,13 +1811,13 @@ main() {
       while IFS= read -r sequence_line; do
         [[ -n "${sequence_line}" ]] && sequence_ids+=("${sequence_line}")
       done < <(build_init_sequence_to_step "${target_step}")
-      ((${#sequence_ids[@]} > 0)) || die "No init steps found for range 2-${target_step}."
+      ((${#sequence_ids[@]} > 0)) || die "No init steps found for range 1-${target_step}."
 
       local preview=""
       local confirmation_body=""
       preview="$(render_execution_list_with_scripts "${sequence_ids[@]}")"
       confirmation_body="$(cat <<EOF
-将从初始化第 2 步顺序执行到第 ${target_step} 步:
+将从初始化第 1 步顺序执行到第 ${target_step} 步:
 
 ${preview}
 EOF

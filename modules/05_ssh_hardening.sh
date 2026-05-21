@@ -146,6 +146,11 @@ main() {
   log info "Last successful SSH auth for ${ADMIN_USER:-<unset>}: ${last_auth_label}"
   log info "Publickey-only test: $(ssh_force_publickey_test_command "${ADMIN_USER:-<ADMIN_USER>}" "${applied_port}")"
 
+  if is_true "${PLAN_ONLY:-false}" || is_true "${DRY_RUN:-false}"; then
+    log info "[plan] 跳过 sshd 实际运行值强校验；正式执行时会校验 sshd -T 与本阶段目标一致。"
+    return 0
+  fi
+
   if [[ "${runtime_port}" != "${applied_port}" ]]; then
     die "SSH 实际端口与本阶段目标不一致：expected port=${applied_port}, actual port=${runtime_port}. Source: ${port_source:-not found}"
   fi
@@ -178,7 +183,7 @@ main() {
   fi
 
   if [[ "${current_root_auth}" != "no" ]]; then
-    log info "Root remote SSH login is still enabled in this stage; 第 6 步才会做最终收口。"
+    log info "Root remote SSH login is still enabled in this stage; 第 5 步才会做最终收口。"
   fi
 }
 

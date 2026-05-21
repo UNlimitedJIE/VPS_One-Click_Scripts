@@ -29,9 +29,17 @@ main() {
   local passed="yes"
 
   load_avg="$(uptime 2>/dev/null | sed -n 's/.*load average: //p' || true)"
-  memory_state="$(free -h 2>/dev/null | awk '/^Mem:/ {print "used=" $3 ",available=" $7}')"
-  disk_state="$(df -h / 2>/dev/null | awk 'NR==2 {print "root_used=" $3 ",root_avail=" $4 ",use%=" $5}')"
-  failed_units_count="$(systemctl --failed --no-pager --plain 2>/dev/null | awk 'NR>1 && $1 !~ /^UNIT$/ && NF {count++} END {print count+0}')"
+  if command_exists free; then
+    memory_state="$(free -h 2>/dev/null | awk '/^Mem:/ {print "used=" $3 ",available=" $7}' || true)"
+  else
+    memory_state="memory=unknown"
+  fi
+  disk_state="$(df -h / 2>/dev/null | awk 'NR==2 {print "root_used=" $3 ",root_avail=" $4 ",use%=" $5}' || true)"
+  if command_exists systemctl; then
+    failed_units_count="$(systemctl --failed --no-pager --plain 2>/dev/null | awk 'NR>1 && $1 !~ /^UNIT$/ && NF {count++} END {print count+0}' || true)"
+  else
+    failed_units_count="0"
+  fi
 
   if [[ "${failed_units_count}" != "0" ]]; then
     passed="no"

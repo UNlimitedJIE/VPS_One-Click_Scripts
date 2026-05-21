@@ -68,7 +68,17 @@ supported_debian_versions_label() {
 }
 
 memory_mb() {
-  awk '/MemTotal:/ {print int($2/1024)}' /proc/meminfo
+  if [[ -r /proc/meminfo ]]; then
+    awk '/MemTotal:/ {print int($2/1024)}' /proc/meminfo
+    return 0
+  fi
+
+  if command_exists sysctl; then
+    sysctl -n hw.memsize 2>/dev/null | awk '{print int($1/1024/1024)}' || printf '%s\n' "0"
+    return 0
+  fi
+
+  printf '%s\n' "0"
 }
 
 cpu_cores() {
@@ -80,7 +90,22 @@ has_active_swap() {
 }
 
 home_dir_for_user() {
-  getent passwd "$1" | cut -d: -f6
+  local user="$1"
+
+  if command_exists getent; then
+    getent passwd "${user}" | cut -d: -f6
+    return 0
+  fi
+
+  if command_exists dscl; then
+    dscl . -read "/Users/${user}" NFSHomeDirectory 2>/dev/null | awk '{print $2}'
+    return 0
+  fi
+
+  if [[ -r /etc/passwd ]]; then
+    awk -F: -v user="${user}" '$1 == user {print $6; exit}' /etc/passwd
+    return 0
+  fi
 }
 
 count_valid_ssh_keys_in_file() {
@@ -126,7 +151,13 @@ ssh_service_name() {
 }
 
 interactive_users() {
-  getent passwd | awk -F: '
+  if command_exists getent; then
+    getent passwd
+  elif [[ -r /etc/passwd ]]; then
+    cat /etc/passwd
+  else
+    return 0
+  fi | awk -F: '
     $7 ~ /(bash|sh|zsh|fish)$/ && $1 != "nobody" {
       print $1
     }
@@ -134,7 +165,15 @@ interactive_users() {
 }
 
 sudo_members() {
-  getent group sudo | awk -F: '{print $4}'
+  if command_exists getent; then
+    getent group sudo | awk -F: '{print $4}'
+    return 0
+  fi
+
+  if [[ -r /etc/group ]]; then
+    awk -F: '$1 == "sudo" {print $4; exit}' /etc/group
+    return 0
+  fi
 }
 
 listening_tcp_ports() {

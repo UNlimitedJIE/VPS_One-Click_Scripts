@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Module: 11_verify
-# Purpose: 验收初始化第 2 到第 11 步的实际系统状态。
+# Purpose: 验收初始化第 1 到第 10 步的实际系统状态。
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
@@ -236,8 +236,12 @@ check_step_2_base_update() {
     package_installed "${package_name}" || missing_packages+=("${package_name}")
   done
 
-  mapfile -t kept_back < <(apt_list_kept_back_packages 2>/dev/null || true)
-  mapfile -t upgradable < <(apt_upgradable_packages 2>/dev/null || true)
+  while IFS= read -r package_name; do
+    kept_back+=("${package_name}")
+  done < <(apt_list_kept_back_packages 2>/dev/null || true)
+  while IFS= read -r package_name; do
+    upgradable+=("${package_name}")
+  done < <(apt_upgradable_packages 2>/dev/null || true)
 
   current="openssh-server=${openssh_version}; openssl=${openssl_version}; upgradable=${#upgradable[@]}; kept-back=$(if ((${#kept_back[@]} > 0)); then printf '%s' "${kept_back[*]}"; else printf none; fi)"
   evidence="dpkg-query/openssl version, apt list --upgradable, apt-get -s upgrade"
@@ -271,7 +275,7 @@ check_step_3_admin_account() {
   if [[ -z "${ADMIN_USER:-}" ]]; then
     emit_check \
       "ERROR" \
-      "第 5 步 管理用户账户" \
+      "第 4 步 管理用户账户" \
       "ADMIN_USER 为空" \
       "必须存在明确的管理用户" \
       "配置来源：${ACTIVE_CONFIG_CHAIN:-unknown}" \
@@ -284,7 +288,7 @@ check_step_3_admin_account() {
     evidence="getent passwd ${ADMIN_USER}"
     emit_check \
       "OK" \
-      "第 5 步 管理用户账户" \
+      "第 4 步 管理用户账户" \
       "${current}" \
       "管理用户存在，且 home 目录可解析" \
       "${evidence}" \
@@ -294,11 +298,11 @@ check_step_3_admin_account() {
 
   emit_check \
     "ERROR" \
-    "第 5 步 管理用户账户" \
+    "第 4 步 管理用户账户" \
     "用户 ${ADMIN_USER} 不存在" \
     "管理用户必须已经创建" \
     "getent passwd ${ADMIN_USER} 无结果" \
-    "第 5 步未通过，后续 SSH 接入也不会成立。"
+    "第 4 步未通过，后续 SSH 接入也不会成立。"
 }
 
 check_step_3_sudo_mode() {
@@ -315,7 +319,7 @@ check_step_3_sudo_mode() {
   if [[ -z "${ADMIN_USER:-}" ]] || ! id -u "${ADMIN_USER}" >/dev/null 2>&1; then
     emit_check \
       "PENDING" \
-      "第 5 步 sudo 行为" \
+      "第 4 步 sudo 行为" \
       "无法检查，管理用户不存在" \
       "应明确为 nopasswd 或 password" \
       "ADMIN_USER 不可用" \
@@ -356,7 +360,7 @@ check_step_3_sudo_mode() {
       ;;
     no-sudo)
       level="ERROR"
-      conclusion="当前没有检测到该管理用户的有效 sudo 权限；这与第 5 步目标不一致。"
+      conclusion="当前没有检测到该管理用户的有效 sudo 权限；这与第 4 步目标不一致。"
       ;;
     *)
       level="ERROR"
@@ -366,7 +370,7 @@ check_step_3_sudo_mode() {
 
   emit_check \
     "${level}" \
-    "第 5 步 sudo 行为" \
+    "第 4 步 sudo 行为" \
     "${current}" \
     "应明确为 nopasswd 或 password；若为 password，当前实现仍依赖账户密码" \
     "${evidence}" \
@@ -383,7 +387,7 @@ check_step_3_account_password() {
   if [[ -z "${ADMIN_USER:-}" ]] || ! id -u "${ADMIN_USER}" >/dev/null 2>&1; then
     emit_check \
       "PENDING" \
-      "第 5 步 本地账户密码状态" \
+      "第 4 步 本地账户密码状态" \
       "无法检查，管理用户不存在" \
       "应与当前 sudo 模式兼容" \
       "ADMIN_USER 不可用" \
@@ -407,7 +411,7 @@ check_step_3_account_password() {
 
   emit_check \
     "${level}" \
-    "第 5 步 本地账户密码状态" \
+    "第 4 步 本地账户密码状态" \
     "${state_label}" \
     "应与 sudo 模式兼容" \
     "getent shadow / user_account_password_state" \
@@ -450,7 +454,7 @@ check_step_4_ssh_port() {
 
   emit_check \
     "${level}" \
-    "第 4 步 SSH 端口状态" \
+    "第 3 步 SSH 端口状态" \
     "${current}" \
     "当前目标 SSH 端口与 sshd 实际生效端口一致" \
     "${evidence}" \
@@ -473,11 +477,11 @@ check_step_4_authorized_keys() {
   if [[ -z "${ADMIN_USER:-}" ]] || ! id -u "${ADMIN_USER}" >/dev/null 2>&1; then
     emit_check \
       "ERROR" \
-      "第 5 步 目标账户 authorized_keys" \
+      "第 4 步 目标账户 authorized_keys" \
       "无法检查，管理用户不存在" \
       "目标用户 .ssh/authorized_keys 必须真实存在且权限正确" \
       "ADMIN_USER 不可用" \
-      "第 5 步未通过。"
+      "第 4 步未通过。"
     return 0
   fi
 
@@ -506,7 +510,7 @@ check_step_4_authorized_keys() {
     conclusion="目标账户 authorized_keys 已真实安装成功，safe gate 的前置条件成立。"
   elif [[ "${source_key_count}" -gt 0 ]]; then
     level="ERROR"
-    conclusion="源文件已有有效公钥，但目标账户 authorized_keys 仍未安装成功；这正是第 5 步需要修复的状态。"
+    conclusion="源文件已有有效公钥，但目标账户 authorized_keys 仍未安装成功；这正是第 4 步需要修复的状态。"
   else
     level="ERROR"
     conclusion="固定源文件和目标账户 authorized_keys 都还没有就绪。"
@@ -514,7 +518,7 @@ check_step_4_authorized_keys() {
 
   emit_check \
     "${level}" \
-    "第 5 步 目标账户 authorized_keys" \
+    "第 4 步 目标账户 authorized_keys" \
     "${current}" \
     "目标文件存在、属主属组正确、权限正确、至少 1 条有效 key" \
     "${evidence}" \
@@ -560,12 +564,12 @@ check_step_4_5_ssh_policy() {
   root_source="$(sshd_last_directive_source_line "PermitRootLogin" || true)"
 
   current="pubkey=${pubkey_auth:-unknown}; password=${password_auth:-unknown}; kbd=${kbd_auth:-unknown}; permitrootlogin=${permit_root_login:-unknown}; port=${port}; safe_gate=$(if [[ "${auth_ready}" == "yes" ]]; then printf yes; else printf no; fi)"
-  expected="pubkey=yes; password=${expected_password_auth}; kbd=no; permitrootlogin=no after step 6 cutover; port=${SSH_PORT:-unknown}"
+  expected="pubkey=yes; password=${expected_password_auth}; kbd=no; permitrootlogin=no after step 5 cutover; port=${SSH_PORT:-unknown}"
   evidence="sshd -T; PubkeyAuthentication source=${pubkey_source:-not found}; PasswordAuthentication source=${password_source:-not found}; PermitRootLogin source=${root_source:-not found}"
 
   if [[ "${pubkey_auth}" != "yes" ]]; then
     level="ERROR"
-    conclusion="当前 PubkeyAuthentication 不是 yes；来源已经在 Evidence 中列出，这与第 5 步目标策略直接冲突。"
+    conclusion="当前 PubkeyAuthentication 不是 yes；来源已经在 Evidence 中列出，这与第 4 步目标策略直接冲突。"
   elif [[ "${password_auth}" != "${expected_password_auth}" ]]; then
     level="ERROR"
     conclusion="当前 PasswordAuthentication 与 safe gate 应有的状态不一致；Evidence 已指出显式配置来源。"
@@ -574,14 +578,14 @@ check_step_4_5_ssh_policy() {
     conclusion="当前 KbdInteractiveAuthentication 仍未关闭，不符合脚本的基线目标。"
   elif [[ "${permit_root_login}" != "no" ]]; then
     level="ERROR"
-    conclusion="第 6 步切换尚未真正完成；当前 root 远程登录仍然开放。"
+    conclusion="第 5 步切换尚未真正完成；当前 root 远程登录仍然开放。"
   else
     conclusion="SSH 实际生效值与脚本目标一致；safe gate 和最终 cutover 都已达成。"
   fi
 
   emit_check \
     "${level}" \
-    "第 5/6 步 SSH 接入与收紧状态" \
+    "第 4/5 步 SSH 接入与收紧状态" \
     "${current}" \
     "${expected}" \
     "${evidence}" \
@@ -615,7 +619,7 @@ check_step_4_5_ssh_auth_method() {
 
   emit_check \
     "${level}" \
-    "第 5/6 步 最近一次成功 SSH 登录方式" \
+    "第 4/5 步 最近一次成功 SSH 登录方式" \
     "${auth_label}" \
     "最终应观察到 publickey；password-only 测试应失败" \
     "${auth_line:-journalctl/auth.log 中暂无可判定行}" \
@@ -649,7 +653,7 @@ check_step_6_nftables() {
 
   emit_check \
     "${level}" \
-    "第 7 步 nftables 状态" \
+    "第 6 步 nftables 状态" \
     "${current}" \
     "nftables enabled and active；/etc/nftables.conf 存在；当前 SSH 端口已放行" \
     "systemctl is-enabled/is-active nftables；/etc/nftables.conf" \
@@ -683,7 +687,7 @@ check_step_7_time_sync() {
 
   emit_check \
     "${level}" \
-    "第 8 步 时间同步状态" \
+    "第 7 步 时间同步状态" \
     "${current}" \
     "systemd-timesyncd enabled and active；NTP=yes；NTPSynchronized=yes" \
     "timedatectl show；systemctl is-enabled/is-active systemd-timesyncd" \
@@ -720,7 +724,7 @@ check_step_8_auto_updates() {
 
   emit_check \
     "${level}" \
-    "第 9 步 自动安全更新状态" \
+    "第 8 步 自动安全更新状态" \
     "${current}" \
     "20auto-upgrades 存在且关键项为 1；unattended-upgrades 已启用" \
     "${config_file}; systemctl is-enabled/is-active unattended-upgrades" \
@@ -754,7 +758,7 @@ check_step_9_fail2ban() {
 
   emit_check \
     "${level}" \
-    "第 10 步 Fail2Ban 状态" \
+    "第 9 步 Fail2Ban 状态" \
     "${current}" \
     "fail2ban enabled and active；sshd jail 可读" \
     "/etc/fail2ban/jail.d/sshd.local；systemctl is-enabled/is-active fail2ban；fail2ban-client status sshd" \
@@ -787,7 +791,7 @@ check_step_10_swap() {
 
   emit_check \
     "${level}" \
-    "第 11 步 swap 状态" \
+    "第 10 步 swap 状态" \
     "${swap_summary}" \
     "若启用则应有 active swap 和 fstab 项；若跳过则应是明确 skip 决策" \
     "swapon --show；/etc/fstab；/swapfile；runtime state 仅作辅助" \
@@ -843,26 +847,26 @@ EOF
 main() {
   load_config
   init_runtime
-  module_banner "11_verify" "初始化第 2-11 步验收"
+  module_banner "11_verify" "初始化第 1-10 步验收"
 
-  emit_section "=== Initialization Acceptance: Steps 2-11 ==="
+  emit_section "=== Initialization Acceptance: Steps 1-10 ==="
 
   check_step_2_base_update
 
-  emit_section "-- Step 4 SSH 端口 --"
+  emit_section "-- Step 3 SSH 端口 --"
   check_step_4_ssh_port
 
-  emit_section "-- Step 5 管理用户接入 --"
+  emit_section "-- Step 4 管理用户接入 --"
   check_step_3_admin_account
   check_step_3_sudo_mode
   check_step_3_account_password
   check_step_4_authorized_keys
 
-  emit_section "-- Step 5 / 6 SSH 接入与收紧 --"
+  emit_section "-- Step 4 / 5 SSH 接入与收紧 --"
   check_step_4_5_ssh_policy
   check_step_4_5_ssh_auth_method
 
-  emit_section "-- Step 7-11 关键服务与系统状态 --"
+  emit_section "-- Step 6-10 关键服务与系统状态 --"
   check_step_6_nftables
   check_step_7_time_sync
   check_step_8_auto_updates

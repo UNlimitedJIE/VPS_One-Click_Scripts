@@ -158,8 +158,6 @@ set_default_config() {
   DISABLE_ROOT_SSH_PASSWORD="${DISABLE_ROOT_SSH_PASSWORD:-true}"
   INSTALL_FAIL2BAN="${INSTALL_FAIL2BAN:-true}"
   INSTALL_UNATTENDED_UPGRADES="${INSTALL_UNATTENDED_UPGRADES:-true}"
-  ENABLE_NODEQUALITY="${ENABLE_NODEQUALITY:-true}"
-  NODEQUALITY_FORCE="${NODEQUALITY_FORCE:-false}"
   ENABLE_NFTABLES="${ENABLE_NFTABLES:-true}"
   ENABLE_TIME_SYNC="${ENABLE_TIME_SYNC:-true}"
   PLAN_ONLY="${PLAN_ONLY:-false}"
@@ -273,7 +271,7 @@ export_config() {
   export ADMIN_USER ADMIN_USER_SHELL ADMIN_USER_GROUPS ADMIN_SUDO_MODE_DEFAULT AUTHORIZED_KEYS_FILE
   export DISABLE_PASSWORD_LOGIN DISABLE_ROOT_SSH_PASSWORD
   export INSTALL_FAIL2BAN INSTALL_UNATTENDED_UPGRADES
-  export ENABLE_NODEQUALITY NODEQUALITY_FORCE ENABLE_NFTABLES ENABLE_TIME_SYNC
+  export ENABLE_NFTABLES ENABLE_TIME_SYNC
   export PLAN_ONLY DRY_RUN BASE_PACKAGES JOURNAL_VACUUM_DAYS
   export CLEANUP_APT_CACHE SNAPSHOT_REMINDER
 }
@@ -1033,9 +1031,6 @@ module_completion_state_found() {
   local module_id="${1:-}"
 
   case "${module_id}" in
-    00_nodequality)
-      [[ -n "$(get_state "NODEQUALITY_DONE" || true)" ]]
-      ;;
     01_detect_system)
       [[ -n "$(get_state "DETECT_SYSTEM_DONE" || true)" ]]
       ;;
@@ -1081,9 +1076,6 @@ module_completion_state_found() {
     32_dns_purification)
       [[ -n "$(get_state "NETWORK_DNS_PURIFIED" || true)" ]]
       ;;
-    33_realm_timeout_fix)
-      [[ -n "$(get_state "NETWORK_REALM_TIMEOUT_FIXED" || true)" ]]
-      ;;
     34_ipv6_management)
       [[ -n "$(get_state "NETWORK_IPV6_MANAGED" || true)" ]]
       ;;
@@ -1094,25 +1086,6 @@ module_completion_state_found() {
       return 1
       ;;
   esac
-}
-
-nodequality_prerequisite_conditions_satisfied() {
-  local tool=""
-  local os_name=""
-
-  if is_false "${ENABLE_NODEQUALITY:-true}"; then
-    return 0
-  fi
-
-  [[ -r "${PROJECT_ROOT}/bootstrap.sh" ]] || return 1
-  [[ -r "$(registry_file)" ]] || return 1
-
-  for tool in awk sed grep cut mktemp getent uname; do
-    command_exists "${tool}" || return 1
-  done
-
-  os_name="$(pretty_os_name 2>/dev/null || echo unknown)"
-  [[ -n "${os_name}" && "${os_name}" != "unknown" ]]
 }
 
 detect_system_prerequisite_conditions_satisfied() {
@@ -1286,16 +1259,6 @@ network_dns_prerequisite_conditions_satisfied() {
   [[ "$(network_tuning_dns_mode_label)" != "未启用" ]]
 }
 
-network_realm_prerequisite_conditions_satisfied() {
-  local service_name=""
-  local config_path=""
-
-  service_name="$(network_tuning_realm_service_name || true)"
-  config_path="$(network_tuning_realm_config_path || true)"
-  [[ -n "${config_path}" && -f "${config_path}" ]] || return 1
-  [[ -z "${service_name}" || "$(network_tuning_service_state "${service_name}")" == "active" ]]
-}
-
 network_ipv6_prerequisite_conditions_satisfied() {
   [[ "$(network_tuning_ipv6_state_label)" != "无法判定" ]]
 }
@@ -1309,7 +1272,6 @@ module_prerequisite_conditions_satisfied() {
   local module_id="${1:-}"
 
   case "${module_id}" in
-    00_nodequality) nodequality_prerequisite_conditions_satisfied ;;
     01_detect_system) detect_system_prerequisite_conditions_satisfied ;;
     02_update_base) update_base_prerequisite_conditions_satisfied ;;
     025_change_ssh_port) ssh_port_change_prerequisite_conditions_satisfied ;;
@@ -1325,7 +1287,6 @@ module_prerequisite_conditions_satisfied() {
     30_xanmod_bbr3) network_xanmod_prerequisite_conditions_satisfied ;;
     31_bbr_landing_optimization) network_bbr_prerequisite_conditions_satisfied ;;
     32_dns_purification) network_dns_prerequisite_conditions_satisfied ;;
-    33_realm_timeout_fix) network_realm_prerequisite_conditions_satisfied ;;
     34_ipv6_management) network_ipv6_prerequisite_conditions_satisfied ;;
     36_network_tuning_status) network_status_prerequisite_conditions_satisfied ;;
     *)
@@ -2821,64 +2782,6 @@ network_tuning_ipv6_state_label() {
   fi
 
   printf '%s\n' "无法判定"
-}
-
-network_tuning_realm_service_name() {
-  local unit=""
-
-  if service_exists "realm"; then
-    printf '%s\n' "realm"
-    return 0
-  fi
-
-  unit="$(systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '$1 ~ /^realm(@.*)?\.service$/ {sub(/\.service$/, "", $1); print $1; exit}')"
-  [[ -n "${unit}" ]] && printf '%s\n' "${unit}"
-}
-
-network_tuning_realm_execstart() {
-  local service_name="${1:-}"
-  [[ -n "${service_name}" ]] || service_name="$(network_tuning_realm_service_name || true)"
-  [[ -n "${service_name}" ]] || return 1
-
-  systemctl cat "${service_name}" 2>/dev/null | awk '
-    /^ExecStart=/ {
-      line = $0
-    }
-    END {
-      if (line != "") {
-        print line
-      }
-    }
-  '
-}
-
-network_tuning_realm_config_path() {
-  local execstart=""
-  local path=""
-
-  execstart="$(network_tuning_realm_execstart || true)"
-  path="$(printf '%s\n' "${execstart}" | sed -nE 's/.*(--config|-c)[[:space:]]+([^[:space:]]+).*/\2/p' | tail -n 1)"
-  if [[ -n "${path}" ]]; then
-    printf '%s\n' "${path}"
-    return 0
-  fi
-
-  for path in /etc/realm/config.toml /etc/realm/config.json /opt/realm/config.toml /opt/realm/config.json /root/realm/config.toml /root/realm/config.json; do
-    [[ -f "${path}" ]] && printf '%s\n' "${path}" && return 0
-  done
-
-  return 1
-}
-
-network_tuning_realm_config_format() {
-  local file="${1:-}"
-  [[ -n "${file}" ]] || file="$(network_tuning_realm_config_path || true)"
-
-  case "${file}" in
-    *.toml) printf '%s\n' "toml" ;;
-    *.json) printf '%s\n' "json" ;;
-    *) printf '%s\n' "unknown" ;;
-  esac
 }
 
 network_tuning_snapshot_file() {

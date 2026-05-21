@@ -17,6 +17,18 @@ assert_file_contains() {
   grep -Fq -- "${needle}" "${file}" || fail "${file} does not contain: ${needle}"
 }
 
+assert_file_absent() {
+  local file="$1"
+  [[ ! -e "${file}" ]] || fail "${file} should be removed"
+}
+
+assert_repo_has_no_fixed_string() {
+  local needle="$1"
+  if grep -R --exclude-dir=.git --exclude-dir=.code-review-graph -F -- "${needle}" "${ROOT_DIR}" >/dev/null 2>&1; then
+    fail "repository still contains: ${needle}"
+  fi
+}
+
 test_debian13_builtin_bbr3_is_detected() {
   is_debian13() { return 0; }
   network_tuning_kernel_supports_bbr() { return 0; }
@@ -28,7 +40,6 @@ test_debian13_builtin_bbr3_is_detected() {
 
 test_submenus_advertise_exit_option() {
   assert_file_contains "${ROOT_DIR}/bootstrap.sh" "99. 退出脚本"
-  assert_file_contains "${ROOT_DIR}/maintenance/27_common_scripts.sh" "99. 退出脚本"
   assert_file_contains "${ROOT_DIR}/maintenance/network/31_bbr_landing_optimization.sh" "99. 退出脚本"
   assert_file_contains "${ROOT_DIR}/maintenance/network/32_dns_purification.sh" "99. 退出脚本"
   assert_file_contains "${ROOT_DIR}/maintenance/network/34_ipv6_management.sh" "99. 退出脚本"
@@ -46,9 +57,30 @@ test_debian13_xanmod_module_is_annotated() {
   assert_file_contains "${ROOT_DIR}/config/module-registry.tsv" "Debian 13"
 }
 
+test_removed_external_script_modules_stay_removed() {
+  local removed_init_module="${ROOT_DIR}/modules/00_""node""quality.sh"
+  local removed_maint_module="${ROOT_DIR}/maintenance/27_common""_scripts.sh"
+  local product_name="Node""Quality"
+  local product_lower="node""quality"
+  local removed_maint_id="27_common""_scripts"
+  local removed_env_a="ENABLE_""NODEQUALITY"
+  local removed_env_b="NODEQUALITY""_FORCE"
+  local removed_env_c="COMMON""_SCRIPTS_MENU_MODE"
+
+  assert_file_absent "${removed_init_module}"
+  assert_file_absent "${removed_maint_module}"
+  assert_repo_has_no_fixed_string "${product_name}"
+  assert_repo_has_no_fixed_string "${product_lower}"
+  assert_repo_has_no_fixed_string "${removed_maint_id}"
+  assert_repo_has_no_fixed_string "${removed_env_a}"
+  assert_repo_has_no_fixed_string "${removed_env_b}"
+  assert_repo_has_no_fixed_string "${removed_env_c}"
+}
+
 test_debian13_builtin_bbr3_is_detected
 test_submenus_advertise_exit_option
 test_debian13_avoids_whiptail_by_default
 test_debian13_xanmod_module_is_annotated
+test_removed_external_script_modules_stay_removed
 
 printf 'shell behavior tests passed\n'

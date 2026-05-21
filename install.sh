@@ -6,7 +6,7 @@ REPO_URL="https://github.com/UNlimitedJIE/VPS_One-Click_Scripts"
 
 require_root() {
   if [[ "${EUID}" -ne 0 ]]; then
-    printf '%s\n' "Please run as root. Example: sudo bash <(curl -fsSL https://raw.githubusercontent.com/UNlimitedJIE/VPS_One-Click_Scripts/main/install.sh)" >&2
+    printf '%s\n' "Please run as root. Recommended: git clone https://github.com/UNlimitedJIE/VPS_One-Click_Scripts.git && cd VPS_One-Click_Scripts && sudo bash bootstrap.sh preflight && sudo bash bootstrap.sh plan init && sudo bash bootstrap.sh init" >&2
     exit 1
   fi
 }

@@ -1,8 +1,8 @@
 # VPS_One-Click_Scripts
 
-## 项目简介
+## 项目定位
 
-这是一个面向 Debian 12/13 的菜单式 Bash 脚本项目，用于 VPS 初始化、日常维护和可选的网络调优。
+这是一个面向 Debian 12 / Debian 13 的 VPS 初期安全初始化、SSH 收敛、防火墙收敛和系统维护脚本项目。
 
 统一入口是 `bootstrap.sh`。根菜单分为三部分：
 
@@ -10,83 +10,90 @@
 - 长期维护
 - 网络调优
 
-它不是单一命令的一次性部署器。部分步骤需要交互确认，尤其是管理用户、SSH、公钥、防火墙、root 登录切换和 swap 选择。
+它不是跑分合集，不是测试合集，不是媒体解锁检测合集，也不是第三方软件一键安装器。
 
 ## 适用范围
 
 适合：
 
-- 新装或刚接手的 Debian 12/13 VPS
+- 新装或刚接手的 Debian 12 / Debian 13 VPS
 - 需要按步骤完成基础初始化、SSH 接入收敛和长期维护的场景
 - 希望通过菜单执行，而不是手写一串系统命令的场景
 
 不适合：
 
-- 非 Debian 12/13 系统
+- 非 Debian 12 / Debian 13 系统
 - 完全无人值守的一次性自动化交付场景
 - 没有可用控制台、VNC 或云厂商应急入口时直接做 SSH / 防火墙高风险变更
 
 ## 功能概览
 
-- 初始化 / 基础更新：NodeQuality 基线检测、系统识别、APT 更新、基础工具安装
-- 管理用户接入：创建管理用户、选择 sudo 模式、安装并校验 SSH 公钥
-- SSH 加固：按 safe gate 收敛为公钥优先接入，后续再关闭 root 远程登录
-- 防火墙：启用 `nftables`，只保留必要端口
-- 自动时间同步：设置时区并启用 `systemd-timesyncd`
-- 自动更新：安装并配置 `unattended-upgrades`
+- 系统识别：确认 Debian 版本、内核、资源和基础环境
+- APT 更新和基础工具安装：安装后续初始化所需的 Debian 软件包
+- 管理用户创建：创建或复用管理用户并配置基础权限
+- sudo 行为配置：选择 `nopasswd` 或 `password`
+- SSH 公钥配置和验证：写入 `authorized_keys` 并检查可用性
+- SSH 收敛：收紧密码登录和 root 远程登录
+- nftables 入站收敛：初始化阶段只放行必要 SSH / ICMP / IPv6 ICMP 等基础流量
+- 时间同步：设置时区并启用 `systemd-timesyncd`
+- unattended-upgrades：启用 Debian 安全更新机制
 - Fail2Ban：为 SSH 提供基础暴力破解防护
 - Swap：交互选择 `skip / 1G / 2G / 4G / custom`
-- 验证 / 审查：初始化验收、用户与 SSH 审查、防火墙与端口检查、Fail2Ban 日志检查、资源健康检查、备份检查、变更记录
-- 常用脚本检测：综合测试、性能测试、流媒体/IP 质量、测速、回程、常用环境安装子菜单
-- 网络调优子菜单：XanMod / Debian 13 内置 BBRv3 开关、BBR 调优、DNS 净化、Realm timeout 修复、IPv6 管理、状态查看
+- 验收 / 审查 / 维护：初始化验收、用户与 SSH 审查、防火墙与端口检查、Fail2Ban 日志、资源健康、备份检查、变更记录、日志与 apt cache 清理
+- 可选网络调优：XanMod / Debian 13 内置 BBRv3 开关、BBR 参数、DNS、IPv6、状态查看
 
-## 快速开始
+## 推荐安装方式
 
-首次安装并直接进入菜单：
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/UNlimitedJIE/VPS_One-Click_Scripts/main/install.sh)
-```
-
-前置说明：
-
-- 不需要先手动执行 `apt update && apt install -y git`；安装脚本会自动安装 `git`
-- 只要系统里有 `curl` 或 `wget` 其中一个，就能直接使用上面的安装命令
-- 如果系统里连 `curl` 和 `wget` 都没有，再先执行 `apt update && apt install -y curl`
-
-如果系统没有 `curl`，也可以改用：
-
-```bash
-bash <(wget -qO- https://raw.githubusercontent.com/UNlimitedJIE/VPS_One-Click_Scripts/main/install.sh)
-```
-
-如果你当前不是 root，请改用：
-
-```bash
-sudo bash <(curl -fsSL https://raw.githubusercontent.com/UNlimitedJIE/VPS_One-Click_Scripts/main/install.sh)
-```
-
-说明：
-
-- 首次执行会自动安装 `git`、拉取或更新到 `/opt/VPS_One-Click_Scripts`、安装 `j`，然后直接进入菜单
-- 以后再次打开，只需要输入 `j`
-
-如果你想手动克隆后再进入目录，也可以：
+生产环境更建议先克隆、审查，再执行计划和初始化：
 
 ```bash
 git clone https://github.com/UNlimitedJIE/VPS_One-Click_Scripts.git
 cd VPS_One-Click_Scripts
-sudo bash bootstrap.sh install-shortcut
-j
+sudo bash bootstrap.sh preflight
+sudo bash bootstrap.sh plan init
+sudo bash bootstrap.sh init
 ```
 
-常用入口：
+说明：
+
+- `preflight`：检查基础条件
+- `plan init`：预演初始化步骤，不改系统
+- `init`：按注册表顺序执行初始化
+
+## 便捷安装方式
+
+便捷方式会下载并执行仓库中的 `install.sh`，它会安装 `git`、拉取或更新项目到 `/opt/VPS_One-Click_Scripts`、安装 `j` 快捷命令并进入菜单。
+
+生产环境注意：
+
+- 更建议固定 tag / release 后再执行
+- 直接使用 `main` 分支不可复现
+- 执行前应先审查 `install.sh`
+
+示例：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/UNlimitedJIE/VPS_One-Click_Scripts/main/install.sh -o /tmp/vps-install.sh
+less /tmp/vps-install.sh
+sudo bash /tmp/vps-install.sh
+```
+
+如果系统没有 `curl`，可以先安装：
+
+```bash
+sudo apt update
+sudo apt install -y curl
+```
+
+## 常用入口
 
 ```bash
 bash bootstrap.sh show init
 bash bootstrap.sh plan init
 bash bootstrap.sh preflight
 sudo bash bootstrap.sh init
+bash bootstrap.sh show maintain
+bash bootstrap.sh plan maintain
 ```
 
 说明：
@@ -96,15 +103,15 @@ sudo bash bootstrap.sh init
 - Debian 13 默认使用纯终端确认界面，避免 `whiptail` 中文显示乱码；如确需强制使用可设置 `VPS_UI_FORCE_WHIPTAIL=true`
 - `show`：只看模块说明和顺序
 - `plan`：预演，不改系统
-- `preflight`：在正式执行前检查基础条件
+- `preflight`：正式执行前检查基础条件
 
 ## 初始化流程概览
 
 当前初始化流程固定为 11 步：
 
-1. `00_nodequality`：运行 NodeQuality 基线检测
-2. `01_detect_system`：检查当前系统和机器基础信息
-3. `02_update_base`：更新系统并安装基础工具
+1. `01_detect_system`：检查当前系统和机器基础信息
+2. `02_update_base`：更新系统并安装基础工具
+3. `025_change_ssh_port`：更改 SSH 端口
 4. `03_admin_access_stage`：管理用户接入阶段
 5. `07_switch_admin_login`：关闭 root 远程登录并切换为管理用户登录
 6. `06_nftables`：启用 `nftables` 防火墙并只放行必要端口
@@ -112,14 +119,29 @@ sudo bash bootstrap.sh init
 8. `08_auto_updates`：启用自动安全更新
 9. `09_fail2ban`：启用 Fail2Ban
 10. `10_swap`：显式选择并配置 swap
-11. `11_verify`：验收第 2 到第 10 步的实际结果
+11. `11_verify`：验收第 1 到第 10 步的实际结果
 
-其中第 4 步内部现在固定为：
+其中第 4 步内部固定为：
 
 1. `4.1` 确认管理用户名
 2. `4.2` 配置 sudo 行为
 3. `4.3` 配置并验证 SSH 公钥
 4. SSH 接入准备
+
+## 长期维护菜单
+
+长期维护只保留本项目内部维护能力：
+
+1. 定期更新系统软件
+2. 审查用户、sudo 和 SSH 密钥
+3. 端口管理与防火墙检查
+4. 检查 Fail2Ban 与登录日志
+5. 查看基础资源与服务健康
+6. 检查备份与恢复准备情况
+7. 清理日志和缓存
+8. 记录本次维护状态
+
+维护菜单中的端口管理只修改服务器内部防火墙规则；如果云厂商还有安全组或云防火墙，也必须同步放行或关闭。
 
 ## 推荐使用顺序
 
@@ -127,34 +149,41 @@ sudo bash bootstrap.sh init
 
 1. 先看 `bash bootstrap.sh show init` 或执行 `bash bootstrap.sh preflight`
 2. 再执行 `sudo bash bootstrap.sh init`
-3. 第 4 步完成后，先在新窗口验证“管理用户 + SSH 公钥登录”是否真实可用
-4. 确认新连接没问题后，再继续第 5 步 root 登录切换和第 6 步防火墙
-5. 初始化结束后再看第 11 步验收输出
+3. 管理用户接入阶段完成后，先在新窗口验证“管理用户 + SSH 公钥登录”是否真实可用
+4. 确认新连接没问题后，再继续 root 登录切换和防火墙收敛
+5. 初始化结束后查看验收输出
 6. 后续日常巡检再使用 `maintain` 菜单
 
 高风险重点：
 
-- 第 5 步：关闭 root 远程 SSH 登录
-- 第 6 步：收紧 `nftables` 入站规则
-- SSH 端口改动：只有 `CONFIRM_SSH_PORT_CHANGE=true` 才会真正切换
+- SSH 端口变更
+- 关闭 root 远程 SSH 登录
+- 收紧 `nftables` 入站规则
+- 公钥未验证就提前关闭密码类登录
+
+建议：
+
+- 保留当前 root 会话，不要先退出
+- 先在新窗口验证管理用户登录成功，再继续高风险步骤
+- 最好在可用控制台 / VNC / 云厂商应急入口条件下进行 SSH 和防火墙调整
 
 ## 网络调优说明
 
-网络调优是独立子菜单，不属于基础初始化必做项。当前包含：
+网络调优是独立可选菜单，不属于基础初始化必做项。当前包含：
 
 1. XanMod 内核 / Debian 13 BBRv3 开关
 2. BBR 直连 / 落地优化
 3. DNS 净化
-4. Realm 转发 timeout 修复
-5. IPv6 管理
-6. 查看当前网络调优状态
+4. IPv6 管理
+5. 查看当前网络调优状态
 
 说明：
 
-- `1` 在 Debian 13 且当前内核已支持 `bbr` 时，会标注内置 BBRv3 并默认跳过 XanMod；只有手动选择安装 XanMod 时才会改写 XanMod 源和安装内核
-- `2` 依赖当前内核具备 BBR 能力
-- `3`、`4`、`5` 都是可选项，会直接改变网络行为
-- `6` 是只读状态查看，不改系统
+- `1` 在 Debian 13 且当前内核已支持 `bbr` 时，会标注内置 BBRv3 并默认跳过 XanMod
+- 只有手动选择安装 XanMod 时，才会配置 XanMod 官方源并安装内核包；这是可选高风险项
+- `2` 依赖当前内核具备 BBR 能力，带宽档位来自网卡链路速率或手动输入，不调用外部测试脚本
+- `3`、`4` 都是可选项，会直接改变网络行为
+- `5` 是只读状态查看，不改系统
 
 常用命令：
 
@@ -163,20 +192,11 @@ bash bootstrap.sh show network
 sudo bash bootstrap.sh network
 ```
 
-## 风险提示
+## nftables 定位
 
-以下操作存在锁死 SSH 的风险：
+`modules/06_nftables.sh` 用于初始化阶段的安全入站收敛。
 
-- SSH 端口变更
-- root 远程登录切换
-- 防火墙规则收紧
-- 公钥未验证就提前关闭密码类登录
-
-建议：
-
-- 保留当前 root 会话，不要先退出
-- 先在新窗口验证管理用户登录成功，再继续高风险步骤
-- 最好在可用控制台 / VNC / 云厂商应急入口条件下进行 SSH 和防火墙调整
+它的目标是关闭不必要入站端口，只保留必要 SSH、ICMP、IPv6 ICMP 等基础流量。它不是端口转发脚本，不提供 DNAT、SNAT、MASQUERADE、端口中转或 NAT 转发能力。
 
 ## 项目结构
 
@@ -186,7 +206,6 @@ lib/          公共函数、检测、校验、UI
 modules/      初始化阶段脚本
 maintenance/  长期维护脚本
 maintenance/network/  网络调优脚本
-roles/        预留角色脚本
 scripts/      辅助脚本（如运行残留清理）
 logs/         运行日志目录
 state/        运行状态、变更记录、报告目录
@@ -238,8 +257,6 @@ bash scripts/clean_runtime_artifacts.sh
 - `state/`
 - `.DS_Store`
 - `__MACOSX`
-- `*.bak`
-- `*.tmp`
 
 但不会删除：
 

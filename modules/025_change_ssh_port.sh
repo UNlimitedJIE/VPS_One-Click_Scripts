@@ -27,7 +27,7 @@ show_ssh_port_step_result() {
   local passed="$3"
   local block=""
 
-  block="$(readonly_status_block "第 4 步 SSH 端口" "${current}" "${evidence}" "${passed}")"
+  block="$(readonly_status_block "第 3 步 SSH 端口" "${current}" "${evidence}" "${passed}")"
   printf '%s' "${block}"
 }
 
@@ -41,6 +41,13 @@ fail_ssh_port_step() {
 
 current_sshd_runtime_port_or_die() {
   local current_port=""
+
+  if is_true "${PLAN_ONLY:-false}" || is_true "${DRY_RUN:-false}"; then
+    current_port="$(current_ssh_port)"
+    [[ "${current_port}" =~ ^[0-9]+$ ]] || current_port="${SSH_PORT:-22}"
+    printf '%s\n' "${current_port}"
+    return 0
+  fi
 
   command_exists sshd || die "sshd 命令不存在，无法更改 SSH 端口。"
   validate_sshd_config
@@ -81,8 +88,6 @@ prompt_target_ssh_port() {
   local validation_error=""
 
   if is_true "${PLAN_ONLY:-false}" || is_true "${DRY_RUN:-false}"; then
-    log info "[plan] 当前实际 SSH 端口：${current_port}"
-    log info "[plan] real execution will prompt for the new SSH port and allow 0 to return."
     printf '%s\n' "${SSH_PORT:-${current_port}}"
     return 0
   fi
@@ -91,7 +96,7 @@ prompt_target_ssh_port() {
 
   while true; do
     if ! ui_prompt_input \
-      "第 4 步 更改 SSH 端口" \
+      "第 3 步 更改 SSH 端口" \
       "当前实际 SSH 端口：${current_port}\n请输入新的 SSH 端口。\n输入 0 返回" \
       "${current_port}"; then
       return 1
@@ -198,7 +203,7 @@ main() {
 
   current_port="$(current_sshd_runtime_port_or_die)"
   target_port="$(prompt_target_ssh_port "${current_port}" || true)"
-  [[ -n "${target_port}" ]] || die "第 4 步已取消。"
+  [[ -n "${target_port}" ]] || die "第 3 步已取消。"
 
   config_file="$(project_local_config_path)"
   if [[ "${SSH_PORT:-}" != "${target_port}" ]]; then
@@ -223,7 +228,7 @@ main() {
     return 0
   fi
 
-  confirm_ssh_port_change_risk "${current_port}" "${target_port}" || die "第 4 步已取消。"
+  confirm_ssh_port_change_risk "${current_port}" "${target_port}" || die "第 3 步已取消。"
 
   current_pubkey_auth="$(current_pubkey_authentication_mode || true)"
   current_password_auth="$(current_password_authentication_mode || true)"

@@ -79,21 +79,39 @@ main() {
   fi
 
   ssh_port="$(current_ssh_port)"
-  mapfile -t listening_port_lines < <(listening_socket_details || true)
-  mapfile -t nft_tcp_ports < <(nftables_runtime_allowed_tcp_ports || true)
-  mapfile -t nft_udp_ports < <(nftables_runtime_allowed_udp_ports || true)
+  while IFS= read -r port_line; do
+    listening_port_lines+=("${port_line}")
+  done < <(listening_socket_details || true)
+  while IFS= read -r port_line; do
+    nft_tcp_ports+=("${port_line}")
+  done < <(nftables_runtime_allowed_tcp_ports || true)
+  while IFS= read -r port_line; do
+    nft_udp_ports+=("${port_line}")
+  done < <(nftables_runtime_allowed_udp_ports || true)
 
   if ssh_port_is_listening_locally "${ssh_port}"; then
     ssh_port_listening="yes"
   fi
 
-  if selection_contains "${ssh_port}" "${nft_tcp_ports[@]}"; then
+  if ((${#nft_tcp_ports[@]} > 0)) && selection_contains "${ssh_port}" "${nft_tcp_ports[@]}"; then
     ssh_port_allowed="yes"
   fi
 
-  listening_block="$(format_firewall_list_block "  - " "${listening_port_lines[@]}")"
-  nft_tcp_display="$(join_ports_for_display "${nft_tcp_ports[@]}")"
-  nft_udp_display="$(join_ports_for_display "${nft_udp_ports[@]}")"
+  if ((${#listening_port_lines[@]} > 0)); then
+    listening_block="$(format_firewall_list_block "  - " "${listening_port_lines[@]}")"
+  else
+    listening_block="$(format_firewall_list_block "  - ")"
+  fi
+  if ((${#nft_tcp_ports[@]} > 0)); then
+    nft_tcp_display="$(join_ports_for_display "${nft_tcp_ports[@]}")"
+  else
+    nft_tcp_display="$(join_ports_for_display)"
+  fi
+  if ((${#nft_udp_ports[@]} > 0)); then
+    nft_udp_display="$(join_ports_for_display "${nft_udp_ports[@]}")"
+  else
+    nft_udp_display="$(join_ports_for_display)"
+  fi
 
   if [[ "${nft_state}" == "enabled and active" && "${ssh_port_allowed}" == "yes" ]]; then
     passed="yes"

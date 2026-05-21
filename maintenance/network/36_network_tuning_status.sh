@@ -20,29 +20,6 @@ print_status_section() {
 EOF
 }
 
-realm_status_values() {
-  local config_path="$1"
-  local config_format="$2"
-
-  case "${config_format}" in
-    toml)
-      awk '
-        /^\[network\]/ { in_network = 1; next }
-        in_network && /^\[/ { in_network = 0 }
-        in_network && $1 ~ /^(tcp_timeout|tcp_keepalive|tcp_keepalive_probe)$/ {
-          print $1 "=" $3
-        }
-      ' "${config_path}" 2>/dev/null | paste -sd ',' -
-      ;;
-    json)
-      jq -r '.network | "tcp_timeout=\(.tcp_timeout // "unset"),tcp_keepalive=\(.tcp_keepalive // "unset"),tcp_keepalive_probe=\(.tcp_keepalive_probe // "unset")"' "${config_path}" 2>/dev/null || printf 'unknown'
-      ;;
-    *)
-      printf 'unknown'
-      ;;
-  esac
-}
-
 main() {
   load_config
   init_runtime
@@ -71,14 +48,6 @@ main() {
   local dns_dot=""
   local dns_effective="no"
   local dns_pass="no"
-
-  local realm_service=""
-  local realm_config=""
-  local realm_format=""
-  local realm_state="未检测到 Realm"
-  local realm_evidence="未发现 realm 服务与配置"
-  local realm_values="n/a"
-  local realm_pass="未适用"
 
   local ipv6_enabled="yes"
   local ipv6_state=""
@@ -119,22 +88,6 @@ main() {
       ;;
   esac
 
-  realm_service="$(network_tuning_realm_service_name || true)"
-  realm_config="$(network_tuning_realm_config_path || true)"
-  realm_format="$(network_tuning_realm_config_format "${realm_config}")"
-  if [[ -n "${realm_service}" || -n "${realm_config}" ]]; then
-    realm_state="service=${realm_service:-unknown}, config=${realm_config:-unknown}"
-    realm_evidence="systemctl status ${realm_service:-realm}; ${realm_config:-no-config}"
-    realm_pass="no"
-    if [[ -n "${realm_config}" && -f "${realm_config}" ]]; then
-      realm_values="$(realm_status_values "${realm_config}" "${realm_format}")"
-    fi
-    if [[ -n "${realm_service}" && "$(network_tuning_service_state "${realm_service}")" == "active" ]] && printf '%s\n' "${realm_values}" | grep -q 'tcp_timeout=30'; then
-      realm_pass="yes"
-    fi
-    realm_evidence="${realm_evidence}; values=${realm_values}"
-  fi
-
   if [[ "$(network_tuning_ipv6_disable_all)" == "1" || "$(network_tuning_ipv6_disable_default)" == "1" ]]; then
     ipv6_enabled="no"
   fi
@@ -160,12 +113,6 @@ main() {
     "mode=${dns_mode}; servers=${dns_servers}; dot=${dns_dot}; config_effective=${dns_effective}" \
     "$(network_tuning_dns_dropin_path); resolvectl dns / /etc/resolv.conf" \
     "${dns_pass}"
-
-  print_status_section \
-    "Realm timeout 修复状态" \
-    "${realm_state}" \
-    "${realm_evidence}" \
-    "${realm_pass}"
 
   print_status_section \
     "IPv6 状态" \

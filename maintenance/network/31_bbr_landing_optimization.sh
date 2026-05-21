@@ -7,28 +7,9 @@ source "${SCRIPT_DIR}/../../lib/common.sh"
 # shellcheck source=../../lib/ui.sh
 source "${SCRIPT_DIR}/../../lib/ui.sh"
 
-detect_bandwidth_mbps() {
-  local output=""
+detect_link_bandwidth_mbps() {
   local iface=""
   local speed=""
-
-  if command_exists speedtest; then
-    output="$(speedtest --accept-license --accept-gdpr --format=json 2>/dev/null || true)"
-    speed="$(printf '%s\n' "${output}" | jq -r '.download.bandwidth // empty' 2>/dev/null || true)"
-    if [[ -n "${speed}" && "${speed}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-      awk -v value="${speed}" 'BEGIN { printf "%.0f\n", (value * 8) / 1000000 }'
-      return 0
-    fi
-  fi
-
-  if command_exists speedtest-cli; then
-    output="$(speedtest-cli --simple 2>/dev/null || true)"
-    speed="$(printf '%s\n' "${output}" | awk '/^Download:/ {print int($2 + 0.5); exit}')"
-    if [[ -n "${speed}" && "${speed}" =~ ^[0-9]+$ ]]; then
-      printf '%s\n' "${speed}"
-      return 0
-    fi
-  fi
 
   while IFS= read -r iface; do
     [[ -n "${iface}" ]] || continue
@@ -50,7 +31,7 @@ prompt_bandwidth_mbps() {
   local speed=""
 
   while true; do
-    if ! ui_prompt_input "2. BBR 直连/落地优化" $'请选择带宽档位：\n1. 自动测速\n2. 500M\n3. 700M\n4. 1G\n5. 自定义\n0. 返回\n99. 退出脚本'; then
+    if ! ui_prompt_input "2. BBR 直连/落地优化" $'请选择带宽档位：\n1. 自动读取默认网卡链路速率（不访问外部服务）\n2. 500M\n3. 700M\n4. 1G\n5. 自定义\n0. 返回\n99. 退出脚本'; then
       return 1
     fi
 
@@ -63,9 +44,9 @@ prompt_bandwidth_mbps() {
         return 1
         ;;
       1)
-        speed="$(detect_bandwidth_mbps || true)"
-        [[ -n "${speed}" ]] || die "自动测速失败，当前系统未检测到可用测速/链路速率来源。"
-        log info "自动检测到带宽档位: ${speed} Mbps"
+        speed="$(detect_link_bandwidth_mbps || true)"
+        [[ -n "${speed}" ]] || die "自动读取失败，当前系统未检测到可用默认网卡链路速率。"
+        log info "自动读取到带宽档位: ${speed} Mbps"
         printf '%s\n' "${speed}"
         return 0
         ;;
