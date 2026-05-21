@@ -49,15 +49,17 @@
 ```bash
 git clone https://github.com/UNlimitedJIE/VPS_One-Click_Scripts.git
 cd VPS_One-Click_Scripts
+bash bootstrap.sh show init
+bash bootstrap.sh plan init
 sudo bash bootstrap.sh preflight
-sudo bash bootstrap.sh plan init
 sudo bash bootstrap.sh init
 ```
 
 说明：
 
-- `preflight`：检查基础条件
+- `show init`：查看初始化模块和顺序
 - `plan init`：预演初始化步骤，不改系统
+- `preflight`：以 root 权限检查正式执行前的基础条件
 - `init`：按注册表顺序执行初始化
 
 ## 便捷安装方式
@@ -69,6 +71,7 @@ sudo bash bootstrap.sh init
 - 更建议固定 tag / release 后再执行
 - 直接使用 `main` 分支不可复现
 - 执行前应先审查 `install.sh`
+- 不应在未知环境中盲目执行远程脚本
 
 示例：
 
@@ -76,6 +79,14 @@ sudo bash bootstrap.sh init
 curl -fsSL https://raw.githubusercontent.com/UNlimitedJIE/VPS_One-Click_Scripts/main/install.sh -o /tmp/vps-install.sh
 less /tmp/vps-install.sh
 sudo bash /tmp/vps-install.sh
+```
+
+`install.sh` 支持指定来源并跳过自动进入菜单：
+
+```bash
+sudo bash /tmp/vps-install.sh --branch main --no-launch
+sudo bash /tmp/vps-install.sh --version v1.0.0 --no-launch
+sudo bash /tmp/vps-install.sh --commit <commit-sha> --no-launch
 ```
 
 如果系统没有 `curl`，可以先安装：
@@ -226,8 +237,10 @@ state/        运行状态、变更记录、报告目录
 
 说明：
 
-- `local.conf` 适合放主机私有配置
+- `local.conf` 适合放主机私有配置，但它会被 Bash `source` 读取，等价于以当前运行身份执行本地配置内容
+- 不要加载不可信的 config 文件
 - `local.conf` 已被 `.gitignore` 忽略，不建议提交到仓库
+- 不要把真实 IP、SSH key、WireGuard key、token、节点配置或其他私密运维配置提交到 GitHub
 
 ## 开发与维护说明
 

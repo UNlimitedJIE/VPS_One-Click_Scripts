@@ -63,9 +63,12 @@ test_removed_external_script_modules_stay_removed() {
   local product_name="Node""Quality"
   local product_lower="node""quality"
   local removed_maint_id="27_common""_scripts"
-  local removed_env_a="ENABLE_""NODEQUALITY"
-  local removed_env_b="NODEQUALITY""_FORCE"
+  local removed_env_a=""
+  local removed_env_b=""
   local removed_env_c="COMMON""_SCRIPTS_MENU_MODE"
+
+  removed_env_a="$(printf 'ENABLE_%s' "NODE""QUALITY")"
+  removed_env_b="$(printf '%s_FORCE' "NODE""QUALITY")"
 
   assert_file_absent "${removed_init_module}"
   assert_file_absent "${removed_maint_module}"
