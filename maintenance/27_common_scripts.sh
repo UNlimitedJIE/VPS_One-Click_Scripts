@@ -132,11 +132,14 @@ prompt_common_scripts_region() {
   local region=""
 
   while true; do
-    if ! ui_prompt_input "${title}" "${prompt}\n0 = 返回上一步"; then
+    if ! ui_prompt_input "${title}" "${prompt}\n0 = 返回上一步\n99 = 退出脚本"; then
       return 1
     fi
 
     region="$(ui_trim_value "${UI_LAST_INPUT}")"
+    if [[ "${region}" == "99" ]]; then
+      ui_exit_script
+    fi
     if [[ "${region}" == "0" ]]; then
       return 1
     fi
@@ -158,11 +161,14 @@ quote_shell_value() {
 
 menu_common_scripts_benchmark_phase() {
   while true; do
-    if ! ui_prompt_input "常用脚本检测 / 综合测试脚本" $'1. bench.sh\n2. LemonBench\n3. 融合怪\n4. NodeBench\n0. 返回上一级菜单'; then
+    if ! ui_prompt_input "常用脚本检测 / 综合测试脚本" $'1. bench.sh\n2. LemonBench\n3. 融合怪\n4. NodeBench\n0. 返回上一级菜单\n99. 退出脚本'; then
       return 0
     fi
 
     case "$(ui_trim_value "${UI_LAST_INPUT}")" in
+      99)
+        ui_exit_script
+        ;;
       0)
         return 0
         ;;
@@ -179,7 +185,7 @@ menu_common_scripts_benchmark_phase() {
         run_common_script_command "综合测试 - NodeBench" "bash <(curl -sL https://raw.githubusercontent.com/LloydAsp/NodeBench/main/NodeBench.sh)" || true
         ;;
       *)
-        ui_warn_message "输入无效" "只支持输入 1、2、3、4 或 0。"
+        ui_warn_message "输入无效" "只支持输入 1、2、3、4、0 或 99。"
         ;;
     esac
   done
@@ -187,11 +193,14 @@ menu_common_scripts_benchmark_phase() {
 
 menu_common_scripts_performance_phase() {
   while true; do
-    if ! ui_prompt_input "常用脚本检测 / 性能测试" $'1. yabs\n2. 跳过网络，测 GB5\n3. 跳过网络和磁盘，测 GB5\n4. 改测 GB5，不测 GB6\n0. 返回上一级菜单'; then
+    if ! ui_prompt_input "常用脚本检测 / 性能测试" $'1. yabs\n2. 跳过网络，测 GB5\n3. 跳过网络和磁盘，测 GB5\n4. 改测 GB5，不测 GB6\n0. 返回上一级菜单\n99. 退出脚本'; then
       return 0
     fi
 
     case "$(ui_trim_value "${UI_LAST_INPUT}")" in
+      99)
+        ui_exit_script
+        ;;
       0)
         return 0
         ;;
@@ -208,7 +217,7 @@ menu_common_scripts_performance_phase() {
         run_common_script_command "性能测试 - 改测 GB5，不测 GB6" "curl -sL yabs.sh | bash -s -- -5" || true
         ;;
       *)
-        ui_warn_message "输入无效" "只支持输入 1、2、3、4 或 0。"
+        ui_warn_message "输入无效" "只支持输入 1、2、3、4、0 或 99。"
         ;;
     esac
   done
@@ -216,11 +225,14 @@ menu_common_scripts_performance_phase() {
 
 menu_common_scripts_media_phase() {
   while true; do
-    if ! ui_prompt_input "常用脚本检测 / 流媒体及 IP 质量测试" $'1. 最常用版本\n2. 原生检测脚本\n3. 准确度最高\n4. IP 质量体检脚本\n5. 一键修改解锁 DNS\n0. 返回上一级菜单'; then
+    if ! ui_prompt_input "常用脚本检测 / 流媒体及 IP 质量测试" $'1. 最常用版本\n2. 原生检测脚本\n3. 准确度最高\n4. IP 质量体检脚本\n5. 一键修改解锁 DNS\n0. 返回上一级菜单\n99. 退出脚本'; then
       return 0
     fi
 
     case "$(ui_trim_value "${UI_LAST_INPUT}")" in
+      99)
+        ui_exit_script
+        ;;
       0)
         return 0
         ;;
@@ -240,7 +252,7 @@ menu_common_scripts_media_phase() {
         run_common_script_command "流媒体及 IP 质量测试 - 一键修改解锁 DNS" "wget https://raw.githubusercontent.com/Jimmyzxk/DNS-Alice-Unlock/refs/heads/main/dns-unlock.sh && bash dns-unlock.sh" || true
         ;;
       *)
-        ui_warn_message "输入无效" "只支持输入 1、2、3、4、5 或 0。"
+        ui_warn_message "输入无效" "只支持输入 1、2、3、4、5、0 或 99。"
         ;;
     esac
   done
@@ -251,11 +263,14 @@ menu_common_scripts_speed_phase() {
   local quoted_region=""
 
   while true; do
-    if ! ui_prompt_input "常用脚本检测 / 测速脚本" $'1. Speedtest\n2. Taier\n3. hyperspeed\n4. 全球测速\n5. 区域速度测试\n6. Ping 和路由测试\n0. 返回上一级菜单'; then
+    if ! ui_prompt_input "常用脚本检测 / 测速脚本" $'1. Speedtest\n2. Taier\n3. hyperspeed\n4. 全球测速\n5. 区域速度测试\n6. Ping 和路由测试\n0. 返回上一级菜单\n99. 退出脚本'; then
       return 0
     fi
 
     case "$(ui_trim_value "${UI_LAST_INPUT}")" in
+      99)
+        ui_exit_script
+        ;;
       0)
         return 0
         ;;
@@ -284,7 +299,7 @@ menu_common_scripts_speed_phase() {
         run_common_script_command "测速脚本 - Ping 和路由测试 (${region})" "wget -qO- nws.sh | bash -s -- -rt ${quoted_region}" || true
         ;;
       *)
-        ui_warn_message "输入无效" "只支持输入 1、2、3、4、5、6 或 0。"
+        ui_warn_message "输入无效" "只支持输入 1、2、3、4、5、6、0 或 99。"
         ;;
     esac
   done
@@ -292,11 +307,14 @@ menu_common_scripts_speed_phase() {
 
 menu_common_scripts_backtrace_phase() {
   while true; do
-    if ! ui_prompt_input "常用脚本检测 / 回程测试" $'1. 直接显示回程（小白用这个）\n2. 回程详细测试（推荐）\n3. testrace\n0. 返回上一级菜单'; then
+    if ! ui_prompt_input "常用脚本检测 / 回程测试" $'1. 直接显示回程（小白用这个）\n2. 回程详细测试（推荐）\n3. testrace\n0. 返回上一级菜单\n99. 退出脚本'; then
       return 0
     fi
 
     case "$(ui_trim_value "${UI_LAST_INPUT}")" in
+      99)
+        ui_exit_script
+        ;;
       0)
         return 0
         ;;
@@ -310,7 +328,7 @@ menu_common_scripts_backtrace_phase() {
         run_common_script_command "回程测试 - testrace" "wget https://ghproxy.com/https://raw.githubusercontent.com/vpsxb/testrace/main/testrace.sh -O testrace.sh && bash testrace.sh" || true
         ;;
       *)
-        ui_warn_message "输入无效" "只支持输入 1、2、3 或 0。"
+        ui_warn_message "输入无效" "只支持输入 1、2、3、0 或 99。"
         ;;
     esac
   done
@@ -318,11 +336,14 @@ menu_common_scripts_backtrace_phase() {
 
 menu_common_scripts_install_phase() {
   while true; do
-    if ! ui_prompt_input "常用脚本检测 / 一键安装常用环境及软件" $'1. docker\n2. Python\n3. iperf3\n4. realm\n5. gost\n6. 极光面板\n7. 哪吒监控\n8. WARP\n9. Aria2\n10. 宝塔\n11. PVE 虚拟化\n12. Argox\n0. 返回上一级菜单'; then
+    if ! ui_prompt_input "常用脚本检测 / 一键安装常用环境及软件" $'1. docker\n2. Python\n3. iperf3\n4. realm\n5. gost\n6. 极光面板\n7. 哪吒监控\n8. WARP\n9. Aria2\n10. 宝塔\n11. PVE 虚拟化\n12. Argox\n0. 返回上一级菜单\n99. 退出脚本'; then
       return 0
     fi
 
     case "$(ui_trim_value "${UI_LAST_INPUT}")" in
+      99)
+        ui_exit_script
+        ;;
       0)
         return 0
         ;;
@@ -363,7 +384,7 @@ menu_common_scripts_install_phase() {
         run_common_script_command "一键安装常用环境及软件 - Argox" "bash <(wget -qO- https://raw.githubusercontent.com/fscarmen/argox/main/argox.sh)" || true
         ;;
       *)
-        ui_warn_message "输入无效" "只支持输入 1 到 12 或 0。"
+        ui_warn_message "输入无效" "只支持输入 1 到 12、0 或 99。"
         ;;
     esac
   done
@@ -379,6 +400,7 @@ interactive_common_scripts_menu() {
 5. 回程测试
 6. 一键安装常用环境及软件
 0. 返回上一级菜单
+99. 退出脚本
 
 说明：
 - 进入具体分类后，输入对应编号会立即执行脚本
@@ -390,6 +412,9 @@ EOF
     fi
 
     case "$(ui_trim_value "${UI_LAST_INPUT}")" in
+      99)
+        ui_exit_script
+        ;;
       0)
         return 0
         ;;
@@ -412,7 +437,7 @@ EOF
         menu_common_scripts_install_phase
         ;;
       *)
-        ui_warn_message "输入无效" "只支持输入 1、2、3、4、5、6 或 0。"
+        ui_warn_message "输入无效" "只支持输入 1、2、3、4、5、6、0 或 99。"
         ;;
     esac
   done

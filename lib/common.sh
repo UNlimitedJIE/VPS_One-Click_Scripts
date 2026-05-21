@@ -1263,6 +1263,10 @@ maintain_update_prerequisite_conditions_satisfied() {
 }
 
 network_xanmod_prerequisite_conditions_satisfied() {
+  if network_tuning_debian13_bbr3_builtin_available; then
+    return 0
+  fi
+
   detect_system_prerequisite_conditions_satisfied || return 1
   command_exists apt-get || return 1
   command_exists dpkg || return 1
@@ -2599,8 +2603,27 @@ network_tuning_kernel_supports_bbr() {
   printf '%s\n' "$(network_tuning_tcp_available_congestion_control)" | grep -qw 'bbr'
 }
 
+network_tuning_debian13_bbr3_builtin_available() {
+  is_debian13 && network_tuning_kernel_supports_bbr
+}
+
 network_tuning_kernel_supports_bbr3() {
-  network_tuning_kernel_is_xanmod && network_tuning_kernel_supports_bbr
+  network_tuning_kernel_supports_bbr || return 1
+  network_tuning_kernel_is_xanmod || network_tuning_debian13_bbr3_builtin_available
+}
+
+network_tuning_bbr3_source_label() {
+  if network_tuning_kernel_is_xanmod && network_tuning_kernel_supports_bbr; then
+    printf '%s\n' "xanmod"
+    return 0
+  fi
+
+  if network_tuning_debian13_bbr3_builtin_available; then
+    printf '%s\n' "debian13-builtin"
+    return 0
+  fi
+
+  printf '%s\n' "none"
 }
 
 network_tuning_highest_installed_xanmod_kernel() {

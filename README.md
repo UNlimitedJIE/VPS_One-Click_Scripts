@@ -38,7 +38,7 @@
 - Swap：交互选择 `skip / 1G / 2G / 4G / custom`
 - 验证 / 审查：初始化验收、用户与 SSH 审查、防火墙与端口检查、Fail2Ban 日志检查、资源健康检查、备份检查、变更记录
 - 常用脚本检测：综合测试、性能测试、流媒体/IP 质量、测速、回程、常用环境安装子菜单
-- 网络调优子菜单：XanMod + BBR v3、BBR 调优、DNS 净化、Realm timeout 修复、IPv6 管理、状态查看
+- 网络调优子菜单：XanMod / Debian 13 内置 BBRv3 开关、BBR 调优、DNS 净化、Realm timeout 修复、IPv6 管理、状态查看
 
 ## 快速开始
 
@@ -92,6 +92,8 @@ sudo bash bootstrap.sh init
 说明：
 
 - `menu`：交互菜单，适合日常使用
+- 主界面输入 `0` 退出；各子菜单输入 `0` 返回上一级，输入 `99` 直接退出脚本
+- Debian 13 默认使用纯终端确认界面，避免 `whiptail` 中文显示乱码；如确需强制使用可设置 `VPS_UI_FORCE_WHIPTAIL=true`
 - `show`：只看模块说明和顺序
 - `plan`：预演，不改系统
 - `preflight`：在正式执行前检查基础条件
@@ -140,7 +142,7 @@ sudo bash bootstrap.sh init
 
 网络调优是独立子菜单，不属于基础初始化必做项。当前包含：
 
-1. 安装 / 更新 XanMod 内核 + BBR v3
+1. XanMod 内核 / Debian 13 BBRv3 开关
 2. BBR 直连 / 落地优化
 3. DNS 净化
 4. Realm 转发 timeout 修复
@@ -149,7 +151,7 @@ sudo bash bootstrap.sh init
 
 说明：
 
-- `1` 安装或更新内核后，通常需要重启才能真正切换到新内核
+- `1` 在 Debian 13 且当前内核已支持 `bbr` 时，会标注内置 BBRv3 并默认跳过 XanMod；只有手动选择安装 XanMod 时才会改写 XanMod 源和安装内核
 - `2` 依赖当前内核具备 BBR 能力
 - `3`、`4`、`5` 都是可选项，会直接改变网络行为
 - `6` 是只读状态查看，不改系统

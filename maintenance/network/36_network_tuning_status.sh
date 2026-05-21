@@ -52,6 +52,7 @@ main() {
   local xanmod="no"
   local bbr="no"
   local bbr3="no"
+  local bbr3_source="none"
   local available_cc=""
   local current_cc=""
   local kernel_pass="no"
@@ -89,6 +90,7 @@ main() {
   network_tuning_kernel_is_xanmod && xanmod="yes"
   network_tuning_kernel_supports_bbr && bbr="yes"
   network_tuning_kernel_supports_bbr3 && bbr3="yes"
+  bbr3_source="$(network_tuning_bbr3_source_label)"
   [[ "${bbr}" == "yes" ]] && kernel_pass="yes"
 
   default_qdisc="$(network_tuning_default_qdisc)"
@@ -143,7 +145,7 @@ main() {
 
   print_status_section \
     "内核 / BBR 能力" \
-    "kernel=${kernel}; xanmod=${xanmod}; bbr=${bbr}; bbr3=${bbr3}; available=${available_cc}; active=${current_cc}" \
+    "kernel=${kernel}; xanmod=${xanmod}; bbr=${bbr}; bbr3=${bbr3}; bbr3_source=${bbr3_source}; available=${available_cc}; active=${current_cc}" \
     "uname -r; sysctl net.ipv4.tcp_available_congestion_control; sysctl net.ipv4.tcp_congestion_control" \
     "${kernel_pass}"
 

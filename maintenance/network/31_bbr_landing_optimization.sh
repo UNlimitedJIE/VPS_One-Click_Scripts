@@ -50,12 +50,15 @@ prompt_bandwidth_mbps() {
   local speed=""
 
   while true; do
-    if ! ui_prompt_input "2. BBR 直连/落地优化" $'请选择带宽档位：\n1. 自动测速\n2. 500M\n3. 700M\n4. 1G\n5. 自定义\n0. 返回'; then
+    if ! ui_prompt_input "2. BBR 直连/落地优化" $'请选择带宽档位：\n1. 自动测速\n2. 500M\n3. 700M\n4. 1G\n5. 自定义\n0. 返回\n99. 退出脚本'; then
       return 1
     fi
 
     choice="$(ui_trim_value "${UI_LAST_INPUT}")"
     case "${choice}" in
+      99)
+        ui_exit_script
+        ;;
       0)
         return 1
         ;;
@@ -91,7 +94,7 @@ prompt_bandwidth_mbps() {
         ui_warn_message "输入无效" "带宽必须是正整数 Mbps。"
         ;;
       *)
-        ui_warn_message "输入无效" "只支持输入 1、2、3、4、5 或 0。"
+        ui_warn_message "输入无效" "只支持输入 1、2、3、4、5、0 或 99。"
         ;;
     esac
   done
@@ -101,12 +104,15 @@ prompt_region_profile() {
   local choice=""
 
   while true; do
-    if ! ui_prompt_input "地区选择" $'请选择链路地区：\n1. 亚太\n2. 美欧\n0. 返回'; then
+    if ! ui_prompt_input "地区选择" $'请选择链路地区：\n1. 亚太\n2. 美欧\n0. 返回\n99. 退出脚本'; then
       return 1
     fi
 
     choice="$(ui_trim_value "${UI_LAST_INPUT}")"
     case "${choice}" in
+      99)
+        ui_exit_script
+        ;;
       0)
         return 1
         ;;
@@ -119,7 +125,7 @@ prompt_region_profile() {
         return 0
         ;;
       *)
-        ui_warn_message "输入无效" "只支持输入 1、2 或 0。"
+        ui_warn_message "输入无效" "只支持输入 1、2、0 或 99。"
         ;;
     esac
   done

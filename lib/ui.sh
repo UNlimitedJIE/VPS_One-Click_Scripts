@@ -39,6 +39,41 @@ ui_input_is_negative() {
   return 1
 }
 
+ui_input_requests_exit() {
+  [[ "$(ui_trim_value "${1:-}")" == "99" ]]
+}
+
+ui_exit_script() {
+  ui_print_raw "\n已退出脚本。\n" || true
+  exit 0
+}
+
+ui_exit_if_requested() {
+  if ui_input_requests_exit "${1:-}"; then
+    ui_exit_script
+  fi
+}
+
+ui_running_on_debian13() {
+  local os_id_value=""
+  local os_version_value=""
+
+  [[ -r /etc/os-release ]] || return 1
+  os_id_value="$(. /etc/os-release 2>/dev/null; printf '%s' "${ID:-}")"
+  os_version_value="$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_ID:-}")"
+  [[ "${os_id_value}" == "debian" && "${os_version_value}" == "13" ]]
+}
+
+ui_force_whiptail_enabled() {
+  case "${VPS_UI_FORCE_WHIPTAIL:-false}" in
+    1|true|TRUE|yes|YES|on|ON)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
 ui_open_tty() {
   if [[ "${UI_TTY_STATUS}" == "open" ]]; then
     if [[ -n "${UI_TTY_FD:-}" && -e "/dev/fd/${UI_TTY_FD}" ]]; then
@@ -139,6 +174,10 @@ ui_use_whiptail() {
   command_exists whiptail || return 1
   [[ -n "${TERM:-}" && "${TERM}" != "dumb" ]] || return 1
   [[ -t 2 ]]
+
+  if ui_running_on_debian13 && ! ui_force_whiptail_enabled; then
+    return 1
+  fi
 }
 
 ui_require_interactive() {
@@ -203,9 +242,10 @@ ui_confirm_text() {
   ui_require_interactive || return 1
 
   ui_print_raw "\n${title}\n${body}\n"
-  ui_print_raw "输入 y 继续（yes 也可）："
+  ui_print_raw "输入 y 继续（yes 也可），输入 99 直接退出脚本："
   ui_flush_output || true
   ui_read_line || return 1
+  ui_exit_if_requested "${UI_LAST_INPUT}"
   ui_input_is_affirmative "${UI_LAST_INPUT}"
 }
 
@@ -218,9 +258,10 @@ ui_confirm_with_back() {
     result="$(
       whiptail \
         --title "${title}" \
-        --inputbox "${body}\n\n输入 y 继续（yes 也可）\n输入 0 返回上一级菜单" 28 110 "" \
+        --inputbox "${body}\n\n输入 y 继续（yes 也可）\n输入 0 返回上一级菜单\n输入 99 直接退出脚本" 28 110 "" \
         3>&1 1>&2 2>&3
     )" || return 1
+    ui_exit_if_requested "${result}"
     ui_input_is_affirmative "${result}"
     return $?
   fi
@@ -228,9 +269,10 @@ ui_confirm_with_back() {
   ui_require_interactive || return 1
 
   ui_print_raw "\n${title}\n${body}\n"
-  ui_print_raw "输入 y 继续（yes 也可），输入 0 返回上一级菜单："
+  ui_print_raw "输入 y 继续（yes 也可），输入 0 返回上一级菜单，输入 99 直接退出脚本："
   ui_flush_output || true
   ui_read_line || return 1
+  ui_exit_if_requested "${UI_LAST_INPUT}"
   ui_input_is_affirmative "${UI_LAST_INPUT}"
 }
 
@@ -246,18 +288,20 @@ ui_confirm_enter_or_zero() {
     result="$(
       whiptail \
         --title "${title}" \
-        --inputbox "${body}\n\n直接回车继续\n输入 0 取消" 22 100 "" \
+        --inputbox "${body}\n\n直接回车继续\n输入 0 取消\n输入 99 直接退出脚本" 22 100 "" \
         3>&1 1>&2 2>&3
     )" || return 1
+    ui_exit_if_requested "${result}"
     [[ "$(ui_trim_value "${result}")" != "0" ]]
     return $?
   fi
 
   ui_require_interactive || return 1
 
-  ui_print_raw "\n${title}\n${body}\n按回车继续，输入 0 取消："
+  ui_print_raw "\n${title}\n${body}\n按回车继续，输入 0 取消，输入 99 直接退出脚本："
   ui_flush_output || true
   ui_read_line || return 1
+  ui_exit_if_requested "${UI_LAST_INPUT}"
   [[ "$(ui_trim_value "${UI_LAST_INPUT}")" != "0" ]]
 }
 
@@ -275,9 +319,13 @@ ui_prompt_input() {
   if [[ -n "${default_value}" ]]; then
     ui_print_raw "默认值：${default_value}\n"
   fi
+  if [[ "${prompt}" != *"99"* ]]; then
+    ui_print_raw "输入 99 直接退出脚本\n"
+  fi
   ui_print_raw "请输入："
   ui_flush_output || true
   ui_read_line || return 1
+  ui_exit_if_requested "${UI_LAST_INPUT}"
 
   # Apply default when user presses Enter without input
   if [[ -z "$(ui_trim_value "${UI_LAST_INPUT}")" && -n "${default_value}" ]]; then
@@ -290,12 +338,18 @@ ui_prompt_input() {
 
 ui_wait_for_enter() {
   local prompt="${1:-按回车返回菜单：}"
+  local effective_prompt="${prompt}"
 
   ui_require_interactive || return 1
 
-  ui_print_raw "${prompt}"
+  if [[ "${effective_prompt}" != *"99"* ]]; then
+    effective_prompt="${effective_prompt%：}，输入 99 直接退出脚本："
+  fi
+
+  ui_print_raw "${effective_prompt}"
   ui_flush_output || true
   ui_read_line || return 1
+  ui_exit_if_requested "${UI_LAST_INPUT}"
   ui_clear_screen || true
   return 0
 }

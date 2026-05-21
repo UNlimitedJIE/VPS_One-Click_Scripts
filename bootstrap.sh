@@ -27,9 +27,9 @@ Usage:
 
 Menu shortcuts:
   Root menu: 0 = 退出程序
-  Any submenu: 0 = 返回上一级菜单
+  Any submenu: 0 = 返回上一级菜单, 99 = 退出脚本
   Maintain menu: 10 = 顺序执行 1 到 9
-  Network menu: 0 = 返回上一级菜单
+  Network menu: 0 = 返回上一级菜单, 99 = 退出脚本
 
 Menu purpose:
   menu = 快速直接执行
@@ -537,11 +537,14 @@ prompt_admin_user_persist_choice() {
   target_file="$(active_config_file_path)"
 
   while true; do
-    if ! ui_prompt_input "保存管理用户名" "是否将该用户名写入 ${target_file} 作为后续默认值？\n请输入 y/n（yes/no 也可）：" "no"; then
+    if ! ui_prompt_input "保存管理用户名" "是否将该用户名写入 ${target_file} 作为后续默认值？\n请输入 y/n（yes/no 也可），输入 99 退出脚本：" "no"; then
       return 0
     fi
 
     answer="$(ui_trim_value "${UI_LAST_INPUT}")"
+    if [[ "${answer}" == "99" ]]; then
+      ui_exit_script
+    fi
     if ui_input_is_affirmative "${answer}"; then
       upsert_config_assignment "${target_file}" "ADMIN_USER" "${username}"
       return 0
@@ -549,7 +552,7 @@ prompt_admin_user_persist_choice() {
     if ui_input_is_negative "${answer}" || [[ -z "${answer}" || "${answer}" == "0" ]]; then
       return 0
     fi
-    ui_warn_message "输入无效" "请输入 y/n（yes/no 也可）；直接回车默认 no。"
+    ui_warn_message "输入无效" "请输入 y/n（yes/no 也可），输入 99 退出脚本；直接回车默认 no。"
   done
 }
 
@@ -1050,6 +1053,7 @@ render_init_menu_prompt() {
 
   header+=$'\n快捷操作：\n'
   header+=$'0. 返回上一级菜单\n\n'
+  header+=$'99. 退出脚本\n\n'
   header+=$'输入规则：\n'
   header+=$'- 输入单个数字，例如 6，直接执行第 6 步\n'
   header+=$'- 输入多个数字，例如 2,3,4，按输入顺序执行这些步骤\n'
@@ -1076,6 +1080,7 @@ render_maintain_menu_prompt() {
   header+=$'10. 顺序执行 1 到 9\n'
   header+=$'    先展示 1 到 9 的清单，确认后按顺序执行。\n'
   header+=$'0. 返回上一级菜单\n\n'
+  header+=$'99. 退出脚本\n\n'
   header+=$'输入规则：\n'
   header+=$'- 输入单个数字直接执行对应项目\n'
   header+=$'- 输入 3，进入端口管理子菜单；顺序执行时第 3 项只做查看，不进入子菜单\n'
@@ -1103,6 +1108,7 @@ render_network_menu_prompt() {
 
   header+=$'\n快捷操作：\n'
   header+=$'0. 返回上一级菜单\n\n'
+  header+=$'99. 退出脚本\n\n'
   header+=$'输入规则：\n'
   header+=$'- 输入单个数字直接执行对应项目\n'
   header+=$'- 可输入多个编号，例如 1,7\n'
@@ -1174,6 +1180,7 @@ render_port_management_prompt() {
 5. 批量关闭端口
 6. 重载并验证 nftables
 0. 返回上一级菜单
+99. 退出脚本
 
 输入规则：
 - 输入 1 查看当前监听端口和 nftables 规则
@@ -1199,12 +1206,15 @@ prompt_port_management_protocol() {
   local choice=""
 
   while true; do
-    if ! ui_prompt_input "${title}" $'请选择协议：\n1. TCP\n2. UDP\n3. TCP+UDP\n0. 返回上一步'; then
+    if ! ui_prompt_input "${title}" $'请选择协议：\n1. TCP\n2. UDP\n3. TCP+UDP\n0. 返回上一步\n99. 退出脚本'; then
       return 1
     fi
 
     choice="$(ui_trim_value "${UI_LAST_INPUT}")"
     case "${choice}" in
+      99)
+        ui_exit_script
+        ;;
       0)
         return 1
         ;;
@@ -1221,7 +1231,7 @@ prompt_port_management_protocol() {
         return 0
         ;;
       *)
-        ui_warn_message "输入无效" "只支持输入 1、2、3 或 0。"
+        ui_warn_message "输入无效" "只支持输入 1、2、3、0 或 99。"
         ;;
     esac
   done
@@ -1300,6 +1310,9 @@ menu_port_management_phase() {
       0)
         return 0
         ;;
+      99)
+        ui_exit_script
+        ;;
       1)
         menu_execute_with_feedback "查看当前监听端口与 nftables 规则" run_port_management_overview || true
         ;;
@@ -1348,7 +1361,7 @@ menu_port_management_phase() {
         menu_execute_with_feedback "重载并验证 nftables" nftables_reload_and_validate || true
         ;;
       *)
-        ui_warn_message "输入无效" "端口管理子菜单只支持输入 1、2、3、4、5、6 或 0。"
+        ui_warn_message "输入无效" "端口管理子菜单只支持输入 1、2、3、4、5、6、0 或 99。"
         ;;
     esac
   done
@@ -1466,6 +1479,9 @@ menu_init_phase() {
     if [[ "${raw_input}" == "0" ]]; then
       return 0
     fi
+    if [[ "${raw_input}" == "99" ]]; then
+      ui_exit_script
+    fi
 
     local raw_tokens=()
     mapfile -t raw_tokens < <(split_menu_input_tokens "${raw_input}")
@@ -1484,6 +1500,10 @@ menu_init_phase() {
 
     if selection_contains "0" "${raw_tokens[@]}"; then
       ui_warn_message "输入无效" "如果要返回上一级菜单，请只输入 0。"
+      continue
+    fi
+    if selection_contains "99" "${raw_tokens[@]}"; then
+      ui_warn_message "输入无效" "如果要退出脚本，请只输入 99。"
       continue
     fi
 
@@ -1516,6 +1536,9 @@ menu_network_phase() {
     if [[ "${raw_input}" == "0" ]]; then
       return 0
     fi
+    if [[ "${raw_input}" == "99" ]]; then
+      ui_exit_script
+    fi
 
     local raw_tokens=()
     mapfile -t raw_tokens < <(split_menu_input_tokens "${raw_input}")
@@ -1534,6 +1557,10 @@ menu_network_phase() {
 
     if selection_contains "0" "${raw_tokens[@]}"; then
       ui_warn_message "输入无效" "如果要返回上一级菜单，请只输入 0。"
+      continue
+    fi
+    if selection_contains "99" "${raw_tokens[@]}"; then
+      ui_warn_message "输入无效" "如果要退出脚本，请只输入 99。"
       continue
     fi
 
@@ -1566,6 +1593,9 @@ menu_maintain_phase() {
     case "${raw_input}" in
       0)
         return 0
+        ;;
+      99)
+        ui_exit_script
         ;;
       3)
         menu_port_management_phase
@@ -1604,6 +1634,10 @@ menu_maintain_phase() {
 
     if selection_contains "0" "${raw_tokens[@]}"; then
       ui_warn_message "输入无效" "如果要返回上一级菜单，请只输入 0。"
+      continue
+    fi
+    if selection_contains "99" "${raw_tokens[@]}"; then
+      ui_warn_message "输入无效" "如果要退出脚本，请只输入 99。"
       continue
     fi
 

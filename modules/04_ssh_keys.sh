@@ -144,16 +144,20 @@ capture_authorized_keys_source_via_paste() {
 当前目标文件：${auth_file}
 当前源文件：${source_file}
 请现在粘贴一整行 SSH 公钥，粘贴后按回车。
-输入 0 取消"; then
+输入 0 取消
+输入 99 退出脚本"; then
       return 1
     fi
     pasted_key="$(ui_trim_value "${UI_LAST_INPUT}")"
     case "${pasted_key}" in
+      99)
+        ui_exit_script
+        ;;
       0)
         return 1
         ;;
       "")
-        ui_warn_message "未收到公钥" "请粘贴一整行 SSH 公钥，或输入 0 取消。"
+        ui_warn_message "未收到公钥" "请粘贴一整行 SSH 公钥、输入 0 取消，或输入 99 退出脚本。"
         ;;
       *)
         if ! single_line_ssh_public_key_is_valid "${pasted_key}"; then

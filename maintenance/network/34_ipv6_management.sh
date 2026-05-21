@@ -65,11 +65,14 @@ main() {
   init_runtime
 
   while true; do
-    if ! ui_prompt_input "5. IPv6 管理" $'1. 临时禁用 IPv6\n2. 永久禁用 IPv6\n3. 恢复 IPv6\n4. 查看当前 IPv6 状态\n0. 返回'; then
+    if ! ui_prompt_input "5. IPv6 管理" $'1. 临时禁用 IPv6\n2. 永久禁用 IPv6\n3. 恢复 IPv6\n4. 查看当前 IPv6 状态\n0. 返回\n99. 退出脚本'; then
       return 0
     fi
 
     case "$(ui_trim_value "${UI_LAST_INPUT}")" in
+      99)
+        ui_exit_script
+        ;;
       0)
         return 0
         ;;
@@ -92,7 +95,7 @@ main() {
         ui_show_plain_and_wait "当前 IPv6 状态" "$(render_ipv6_status_text)" "按回车返回："
         ;;
       *)
-        ui_warn_message "输入无效" "只支持输入 1、2、3、4 或 0。"
+        ui_warn_message "输入无效" "只支持输入 1、2、3、4、0 或 99。"
         ;;
     esac
   done

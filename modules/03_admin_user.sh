@@ -126,13 +126,16 @@ capture_admin_sudo_mode() {
   while true; do
     if ! ui_prompt_input \
       "第 5.2 段 配置 sudo 行为" \
-      "当前正在设置：sudo 是否需要密码\n- nopasswd = 执行 sudo 不需要密码\n- password = 执行 sudo 需要密码\n- 如果选择 password，接下来会设置该管理用户用于 sudo 验证的密码\n- 0 = 返回" \
+      "当前正在设置：sudo 是否需要密码\n- nopasswd = 执行 sudo 不需要密码\n- password = 执行 sudo 需要密码\n- 如果选择 password，接下来会设置该管理用户用于 sudo 验证的密码\n- 0 = 返回\n- 99 = 退出脚本" \
       "${default_mode}"; then
       die "无法读取 sudo 模式选择，请在交互式终端中执行。"
     fi
 
     answer="$(ui_trim_value "${UI_LAST_INPUT}")"
     case "${answer}" in
+      99)
+        ui_exit_script
+        ;;
       0)
         die "sudo 行为配置已取消。"
         ;;
@@ -148,7 +151,7 @@ capture_admin_sudo_mode() {
         return 0
         ;;
       *)
-        ui_warn_message "输入无效" "请输入 nopasswd、password 或 0。"
+        ui_warn_message "输入无效" "请输入 nopasswd、password、0 或 99。"
         ;;
     esac
   done

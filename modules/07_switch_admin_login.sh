@@ -47,12 +47,15 @@ confirm_cutover_execution() {
   ui_require_interactive || die "关闭 root 远程登录前需要交互确认，请在交互式终端中执行。"
 
   while true; do
-    if ! ui_prompt_input "确认关闭 root 远程登录" "$(cutover_warning_body)\n\n请输入 CUTOVER 继续，输入 0 取消当前步骤：" ""; then
+    if ! ui_prompt_input "确认关闭 root 远程登录" "$(cutover_warning_body)\n\n请输入 CUTOVER 继续，输入 0 取消当前步骤，输入 99 退出脚本：" ""; then
       return 130
     fi
 
     answer="$(ui_trim_value "${UI_LAST_INPUT}")"
     case "${answer}" in
+      99)
+        ui_exit_script
+        ;;
       CUTOVER)
         return 0
         ;;
@@ -60,7 +63,7 @@ confirm_cutover_execution() {
         return 130
         ;;
       *)
-        ui_warn_message "输入无效" "请输入固定短语 CUTOVER 继续，或输入 0 取消当前步骤。"
+        ui_warn_message "输入无效" "请输入固定短语 CUTOVER 继续，输入 0 取消当前步骤，或输入 99 退出脚本。"
         ;;
     esac
   done

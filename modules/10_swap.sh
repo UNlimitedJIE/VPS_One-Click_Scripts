@@ -46,11 +46,14 @@ prompt_custom_swap_size() {
   local normalized=""
 
   while true; do
-    if ! ui_prompt_input "自定义 swap 大小" "请输入自定义大小，例如 512M、1G、2G。\n输入 0 返回上一步：" ""; then
+    if ! ui_prompt_input "自定义 swap 大小" "请输入自定义大小，例如 512M、1G、2G。\n输入 0 返回上一步\n输入 99 退出脚本：" ""; then
       return 1
     fi
 
     answer="$(ui_trim_value "${UI_LAST_INPUT}")"
+    if [[ "${answer}" == "99" ]]; then
+      ui_exit_script
+    fi
     if [[ "${answer}" == "0" ]]; then
       return 1
     fi
@@ -83,13 +86,16 @@ prompt_swap_selection() {
   while true; do
     if ! ui_prompt_input \
       "Swap 选择" \
-      "当前 active swap:\n${current_swap}\n\n请选择虚拟内存（swap）大小：\n0 = 返回\nskip = 不启用 swap / 保持当前状态\n1G = 创建或调整 swapfile 为 1GB\n2G = 创建或调整 swapfile 为 2GB\n4G = 创建或调整 swapfile 为 4GB\ncustom = 输入自定义 swapfile 大小" \
+      "当前 active swap:\n${current_swap}\n\n请选择虚拟内存（swap）大小：\n0 = 返回\n99. 退出脚本\nskip = 不启用 swap / 保持当前状态\n1G = 创建或调整 swapfile 为 1GB\n2G = 创建或调整 swapfile 为 2GB\n4G = 创建或调整 swapfile 为 4GB\ncustom = 输入自定义 swapfile 大小" \
       ""; then
       return 1
     fi
 
     answer="$(ui_trim_value "${UI_LAST_INPUT}")"
     case "${answer}" in
+      99)
+        ui_exit_script
+        ;;
       0)
         return 1
         ;;
@@ -108,7 +114,7 @@ prompt_swap_selection() {
         return 0
         ;;
       *)
-        ui_warn_message "输入无效" "请输入 0、skip、1G、2G、4G 或 custom。"
+        ui_warn_message "输入无效" "请输入 0、99、skip、1G、2G、4G 或 custom。"
         ;;
     esac
   done

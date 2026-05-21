@@ -60,13 +60,16 @@ prompt_timezone_selection() {
   while true; do
     if ! ui_prompt_input \
       "第 8 步 配置时区" \
-      "请选择时区：\n1. UTC\n2. Asia/Shanghai\n3. Asia/Tokyo\n4. Asia/Singapore\n5. Europe/London\n6. America/New_York\n7. America/Chicago\n8. America/Denver\n9. America/Los_Angeles\n10. America/Phoenix\n11. America/Anchorage\n12. Pacific/Honolulu\n13. 自定义输入\n0. 返回\n当前默认：${current_timezone}" \
+      "请选择时区：\n1. UTC\n2. Asia/Shanghai\n3. Asia/Tokyo\n4. Asia/Singapore\n5. Europe/London\n6. America/New_York\n7. America/Chicago\n8. America/Denver\n9. America/Los_Angeles\n10. America/Phoenix\n11. America/Anchorage\n12. Pacific/Honolulu\n13. 自定义输入\n0. 返回\n99. 退出脚本\n当前默认：${current_timezone}" \
       ""; then
       return 1
     fi
 
     choice="$(ui_trim_value "${UI_LAST_INPUT}")"
     case "${choice}" in
+      99)
+        ui_exit_script
+        ;;
       "")
         selected_timezone="${current_timezone}"
         ;;
@@ -78,10 +81,11 @@ prompt_timezone_selection() {
         ;;
       13)
         while true; do
-          if ! ui_prompt_input "第 8 步 自定义时区" "请输入完整时区名称，例如 Asia/Hong_Kong\n输入 0 返回上一步"; then
+          if ! ui_prompt_input "第 8 步 自定义时区" "请输入完整时区名称，例如 Asia/Hong_Kong\n输入 0 返回上一步\n输入 99 退出脚本"; then
             return 1
           fi
           custom_timezone="$(ui_trim_value "${UI_LAST_INPUT}")"
+          [[ "${custom_timezone}" == "99" ]] && ui_exit_script
           [[ "${custom_timezone}" == "0" ]] && break
           if timezone_value_is_valid "${custom_timezone}"; then
             printf '%s\n' "${custom_timezone}"
@@ -92,7 +96,7 @@ prompt_timezone_selection() {
         continue
         ;;
       *)
-        ui_warn_message "输入无效" "只支持输入 1 到 13，或输入 0 返回。"
+        ui_warn_message "输入无效" "只支持输入 1 到 13、0 或 99。"
         continue
         ;;
     esac
