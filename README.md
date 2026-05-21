@@ -86,7 +86,7 @@ sudo bash /tmp/vps-install.sh
 ```bash
 sudo bash /tmp/vps-install.sh --branch main --no-launch
 sudo bash /tmp/vps-install.sh --version v1.0.0 --no-launch
-sudo bash /tmp/vps-install.sh --commit <commit-sha> --no-launch
+sudo bash /tmp/vps-install.sh --commit <commit_sha> --no-launch
 ```
 
 如果系统没有 `curl`，可以先安装：
@@ -115,6 +115,12 @@ bash bootstrap.sh plan maintain
 - `show`：只看模块说明和顺序
 - `plan`：预演，不改系统
 - `preflight`：正式执行前检查基础条件
+
+## 模块执行边界
+
+默认情况下，`bootstrap.sh run` 只允许运行 `config/module-registry.tsv` 中注册过的模块。未注册模块需要显式添加 `--allow-unregistered`，该开关仅用于本地开发或调试；生产环境不建议执行未注册模块。
+
+历史上的第三方检测、评测、线路审查和服务安装合集入口已经移除，初始化与长期维护流程只保留本项目内部的安全初始化和审查能力。
 
 ## 初始化流程概览
 

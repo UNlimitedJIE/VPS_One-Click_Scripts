@@ -29,6 +29,21 @@ assert_repo_has_no_fixed_string() {
   fi
 }
 
+assert_bootstrap_run_rejects_unregistered() {
+  local module_id="$1"
+  local output=""
+  local status=0
+
+  set +e
+  output="$(bash "${ROOT_DIR}/bootstrap.sh" run "${module_id}" 2>&1)"
+  status=$?
+  set -e
+
+  [[ "${status}" -ne 0 ]] || fail "bootstrap run should reject unregistered module: ${module_id}"
+  grep -Fq -- "is not registered. Refusing to run unregistered module." <<< "${output}" \
+    || fail "bootstrap run rejection message missing for: ${module_id}"
+}
+
 test_debian13_builtin_bbr3_is_detected() {
   is_debian13() { return 0; }
   network_tuning_kernel_supports_bbr() { return 0; }
@@ -80,10 +95,19 @@ test_removed_external_script_modules_stay_removed() {
   assert_repo_has_no_fixed_string "${removed_env_c}"
 }
 
+test_bootstrap_run_rejects_removed_modules_by_default() {
+  local removed_init_id="00_""node""quality"
+  local removed_maint_id="27_common""_scripts"
+
+  assert_bootstrap_run_rejects_unregistered "${removed_init_id}"
+  assert_bootstrap_run_rejects_unregistered "${removed_maint_id}"
+}
+
 test_debian13_builtin_bbr3_is_detected
 test_submenus_advertise_exit_option
 test_debian13_avoids_whiptail_by_default
 test_debian13_xanmod_module_is_annotated
 test_removed_external_script_modules_stay_removed
+test_bootstrap_run_rejects_removed_modules_by_default
 
 printf 'shell behavior tests passed\n'

@@ -14,13 +14,13 @@ Usage:
   bash bootstrap.sh init [--config /path/to/conf] [--dry-run]
   bash bootstrap.sh maintain [--config /path/to/conf] [--dry-run]
   bash bootstrap.sh network [--config /path/to/conf] [--dry-run]
-  bash bootstrap.sh run <module_name> [--config /path/to/conf] [--dry-run]
+  bash bootstrap.sh run <module_name> [--config /path/to/conf] [--dry-run] [--allow-unregistered]
   bash bootstrap.sh sync-runtime-copy [--dry-run]
   bash bootstrap.sh step <step_no[,step_no...]> [--config /path/to/conf] [--dry-run]
   bash bootstrap.sh stepseq <target_step_no> [--config /path/to/conf] [--dry-run]
   bash bootstrap.sh preflight [--config /path/to/conf]
   bash bootstrap.sh plan init|maintain|network|install-shortcut|sync-runtime-copy
-  bash bootstrap.sh plan run <module_name>
+  bash bootstrap.sh plan run <module_name> [--allow-unregistered]
   bash bootstrap.sh show init|maintain|network [--config /path/to/conf]
   bash bootstrap.sh menu [init|maintain|network] [--config /path/to/conf] [--dry-run]
   bash bootstrap.sh install-shortcut [--dry-run]
@@ -53,6 +53,7 @@ Examples:
   bash bootstrap.sh stepseq 7 --config config/local.conf
   sudo bash bootstrap.sh init
   sudo bash bootstrap.sh run 05_ssh_hardening
+  bash bootstrap.sh run --allow-unregistered local_module_name
 EOF
 }
 
@@ -60,6 +61,7 @@ parse_args() {
   CLI_CONFIG_FILE=""
   CLI_PLAN_ONLY=""
   CLI_DRY_RUN=""
+  CLI_ALLOW_UNREGISTERED_RUN="false"
   RUNTIME_INITIALIZED="false"
 
   local positionals=()
@@ -72,6 +74,10 @@ parse_args() {
         ;;
       --dry-run)
         CLI_DRY_RUN="true"
+        shift
+        ;;
+      --allow-unregistered)
+        CLI_ALLOW_UNREGISTERED_RUN="true"
         shift
         ;;
       -h|--help)
@@ -124,14 +130,20 @@ ensure_runtime_initialized() {
   RUNTIME_INITIALIZED="true"
 }
 
-resolve_module_path() {
+validate_unregistered_module_name() {
+  local requested="${1:-}"
+
+  [[ -n "${requested}" ]] || die "Unregistered module name cannot be empty."
+  [[ "${requested}" != /* ]] || die "Unregistered module name must not be an absolute path: ${requested}"
+  [[ "${requested}" != *"/"* ]] || die "Unregistered module name must not contain '/': ${requested}"
+  [[ "${requested}" != *".."* ]] || die "Unregistered module name must not contain '..': ${requested}"
+  [[ "${requested}" =~ ^[A-Za-z0-9_.-]+$ ]] || die "Unregistered module name contains unsupported characters: ${requested}"
+}
+
+resolve_unregistered_module_path() {
   local requested="$1"
-  local line=""
-  line="$(registry_find_line "${requested}" || true)"
-  if [[ -n "${line}" ]]; then
-    registry_script_abspath_from_line "${line}"
-    return 0
-  fi
+
+  validate_unregistered_module_name "${requested}"
 
   local normalized="${requested%.sh}.sh"
   local candidate=""
@@ -147,6 +159,11 @@ resolve_module_path() {
   done
 
   return 1
+}
+
+reject_unregistered_module_run() {
+  local requested="$1"
+  die "Module '${requested}' is not registered. Refusing to run unregistered module. Use --allow-unregistered only for local development."
 }
 
 format_step_header() {
@@ -1755,7 +1772,11 @@ main() {
         run_module_from_registry_line "${line}"
       else
         local module_path=""
-        module_path="$(resolve_module_path "${BOOTSTRAP_TARGET}")" || die "Module not found: ${BOOTSTRAP_TARGET}"
+        if is_false "${CLI_ALLOW_UNREGISTERED_RUN:-false}"; then
+          reject_unregistered_module_run "${BOOTSTRAP_TARGET}"
+        fi
+        validate_unregistered_module_name "${BOOTSTRAP_TARGET}"
+        module_path="$(resolve_unregistered_module_path "${BOOTSTRAP_TARGET}")" || die "Module not found: ${BOOTSTRAP_TARGET}"
         local run_status=0
         set +e
         if ! is_true "${PLAN_ONLY:-false}" && module_path_requires_admin_user "${module_path}"; then
@@ -1877,7 +1898,11 @@ EOF
             run_module_from_registry_line "${line}"
           else
             local module_path=""
-            module_path="$(resolve_module_path "${BOOTSTRAP_TARGET_EXTRA}")" || die "Module not found: ${BOOTSTRAP_TARGET_EXTRA}"
+            if is_false "${CLI_ALLOW_UNREGISTERED_RUN:-false}"; then
+              reject_unregistered_module_run "${BOOTSTRAP_TARGET_EXTRA}"
+            fi
+            validate_unregistered_module_name "${BOOTSTRAP_TARGET_EXTRA}"
+            module_path="$(resolve_unregistered_module_path "${BOOTSTRAP_TARGET_EXTRA}")" || die "Module not found: ${BOOTSTRAP_TARGET_EXTRA}"
             run_script_path "${module_path}"
           fi
           ;;
