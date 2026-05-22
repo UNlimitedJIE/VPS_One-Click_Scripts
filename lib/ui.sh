@@ -409,7 +409,7 @@ ui_choose_phase() {
     ui_print_raw $'1. 初始化菜单\n'
     ui_print_raw $'   进入初始化菜单，按数字执行各阶段。\n'
     ui_print_raw $'2. 长期维护菜单\n'
-    ui_print_raw $'   进入长期维护菜单，处理更新、巡检、端口管理等日常维护。\n'
+    ui_print_raw $'   进入长期维护菜单，处理更新、巡检、防火墙审查等日常维护。\n'
     ui_print_raw $'3. 网络调优\n'
     ui_print_raw $'   进入网络调优子菜单。\n'
     ui_print_raw $'\n快捷操作：\n'

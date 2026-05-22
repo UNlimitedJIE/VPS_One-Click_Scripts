@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # Module: 22_audit_firewall
-# Purpose: 作为长期维护中的端口管理入口，查看监听端口和 nftables 规则。
-# Preconditions: root。
+# Purpose: 作为长期维护中的只读审查入口，查看监听端口和 nftables 规则。
+# Preconditions: 无需 root；非 root 运行时部分进程信息可能不可见。
 # Steps:
 #   1. 检查 nftables 是否启用
 #   2. 列出监听 TCP 端口
@@ -52,8 +52,7 @@ join_ports_for_display() {
 main() {
   load_config
   init_runtime
-  module_banner "22_audit_firewall" "端口管理与防火墙检查"
-  require_root
+  module_banner "22_audit_firewall" "防火墙与端口审查"
 
   local report=""
   local nft_state="inactive"
@@ -120,6 +119,7 @@ main() {
   current="$(cat <<EOF
 
 - nftables：${nft_state}
+- nftables 配置文件：$(if [[ -f "$(nftables_config_path)" ]]; then printf 'present'; else printf 'missing'; fi)
 - SSH 端口：${ssh_port}
 - SSH 端口当前是否放行：${ssh_port_allowed}
 - SSH 端口当前是否有服务监听：${ssh_port_listening}

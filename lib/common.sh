@@ -1872,47 +1872,6 @@ nftables_config_path() {
   printf '/etc/nftables.conf\n'
 }
 
-nftables_extra_ports_begin_marker() {
-  printf '# BEGIN VPS EXTRA PORTS\n'
-}
-
-nftables_extra_ports_end_marker() {
-  printf '# END VPS EXTRA PORTS\n'
-}
-
-nftables_extra_ports_legacy_begin_marker() {
-  printf '# BEGIN VPS EXTRA TCP PORTS\n'
-}
-
-nftables_extra_ports_legacy_end_marker() {
-  printf '# END VPS EXTRA TCP PORTS\n'
-}
-
-nftables_detect_extra_ports_markers() {
-  local file=""
-  local begin_marker=""
-  local end_marker=""
-
-  file="$(nftables_config_path)"
-  [[ -f "${file}" ]] || return 1
-
-  begin_marker="$(nftables_extra_ports_begin_marker)"
-  end_marker="$(nftables_extra_ports_end_marker)"
-  if grep -Fq "${begin_marker}" "${file}" && grep -Fq "${end_marker}" "${file}"; then
-    printf '%s\t%s\n' "${begin_marker}" "${end_marker}"
-    return 0
-  fi
-
-  begin_marker="$(nftables_extra_ports_legacy_begin_marker)"
-  end_marker="$(nftables_extra_ports_legacy_end_marker)"
-  if grep -Fq "${begin_marker}" "${file}" && grep -Fq "${end_marker}" "${file}"; then
-    printf '%s\t%s\n' "${begin_marker}" "${end_marker}"
-    return 0
-  fi
-
-  return 1
-}
-
 normalize_numeric_port_list() {
   printf '%s\n' "$@" | awk '
     /^[0-9]+$/ {
@@ -1923,135 +1882,56 @@ normalize_numeric_port_list() {
   ' | sort -n
 }
 
-render_nftables_extra_port_lines() {
-  local proto="${1:-}"
-  shift || true
-  local port=""
-
-  [[ "${proto}" == "tcp" || "${proto}" == "udp" ]] || return 0
-
-  for port in "$@"; do
-    printf '    %s dport %s accept comment "VPS extra port"\n' "${proto}" "${port}"
-  done
-}
-
-render_nftables_managed_extra_block() {
-  local mode=""
-  local arg=""
-  local tcp_ports=()
-  local udp_ports=()
-
-  for arg in "$@"; do
-    case "${arg}" in
-      --tcp)
-        mode="tcp"
-        ;;
-      --udp)
-        mode="udp"
-        ;;
-      *)
-        if [[ "${mode}" == "tcp" ]]; then
-          tcp_ports+=("${arg}")
-        elif [[ "${mode}" == "udp" ]]; then
-          udp_ports+=("${arg}")
-        fi
-        ;;
-    esac
-  done
-
-  if ((${#tcp_ports[@]} > 0)); then
-    render_nftables_extra_port_lines "tcp" "${tcp_ports[@]}"
-  fi
-
-  if ((${#udp_ports[@]} > 0)); then
-    render_nftables_extra_port_lines "udp" "${udp_ports[@]}"
-  fi
-}
-
 nftables_expand_port_spec_tokens() {
   local spec="${1:-}"
 
   printf '%s\n' "${spec}" \
     | tr '{},' '   ' \
     | tr -s '[:space:]' '\n' \
-    | grep -E '^[0-9]+(-[0-9]+)?$' \
-    || true
+    | awk '
+      /^[0-9]+$/ && $1 >= 1 && $1 <= 65535 {
+        if (!seen[$1]++) {
+          print $1
+        }
+      }
+    '
 }
 
-nftables_list_managed_extra_ports_by_proto() {
-  local proto="${1:-}"
-  local file=""
-  local begin_marker=""
-  local end_marker=""
-  local marker_pair=""
+nftables_input_chain_lines_from_stream() {
   local line=""
   local in_block="no"
-  local normalized_line=""
-  local segment=""
-
-  [[ "${proto}" == "tcp" || "${proto}" == "udp" ]] || return 0
-
-  file="$(nftables_config_path)"
-  [[ -f "${file}" ]] || return 0
-  marker_pair="$(nftables_detect_extra_ports_markers || true)"
-  [[ -n "${marker_pair}" ]] || return 0
-  IFS=$'\t' read -r begin_marker end_marker <<<"${marker_pair}"
 
   while IFS= read -r line || [[ -n "${line}" ]]; do
-    if [[ "${line}" == *"${begin_marker}"* ]]; then
-      in_block="yes"
+    if [[ "${in_block}" != "yes" ]]; then
+      if [[ "${line}" =~ chain[[:space:]]+input[[:space:]]*\{ ]]; then
+        in_block="yes"
+      fi
       continue
     fi
 
-    if [[ "${line}" == *"${end_marker}"* ]]; then
+    if [[ "${line}" =~ ^[[:space:]]*} ]]; then
       in_block="no"
       continue
     fi
 
-    [[ "${in_block}" == "yes" ]] || continue
-
-    normalized_line="$(printf '%s\n' "${line}" | tr -s '[:space:]' ' ')"
-    normalized_line="${normalized_line# }"
-    [[ "${normalized_line}" == *"${proto} dport "* ]] || continue
-
-    segment="${normalized_line%% accept*}"
-    segment="${segment#*${proto} dport }"
-    nftables_expand_port_spec_tokens "${segment}"
-  done <"${file}" | sort -u
-}
-
-nftables_list_managed_extra_tcp_ports() {
-  nftables_list_managed_extra_ports_by_proto "tcp"
-}
-
-nftables_list_managed_extra_udp_ports() {
-  nftables_list_managed_extra_ports_by_proto "udp"
+    printf '%s\n' "${line}"
+  done
 }
 
 nftables_runtime_input_chain_lines() {
-  local line=""
-  local in_input_chain="no"
-
   command_exists nft || return 0
-
-  while IFS= read -r line; do
-    if [[ "${in_input_chain}" == "yes" ]]; then
-      if [[ "${line}" =~ ^[[:space:]]*} ]]; then
-        in_input_chain="no"
-        continue
-      fi
-
-      printf '%s\n' "${line}"
-      continue
-    fi
-
-    if [[ "${line}" =~ chain[[:space:]]+input[[:space:]]*\{ ]]; then
-      in_input_chain="yes"
-    fi
-  done < <(nft list ruleset 2>/dev/null || true)
+  nft list ruleset 2>/dev/null | nftables_input_chain_lines_from_stream || true
 }
 
-nftables_runtime_allowed_ports_by_proto() {
+nftables_config_input_chain_lines() {
+  local file=""
+
+  file="$(nftables_config_path)"
+  [[ -f "${file}" ]] || return 0
+  nftables_input_chain_lines_from_stream <"${file}" || true
+}
+
+nftables_allowed_ports_from_input_chain_by_proto() {
   local proto="${1:-}"
   local line=""
   local normalized_line=""
@@ -2059,7 +1939,7 @@ nftables_runtime_allowed_ports_by_proto() {
 
   [[ "${proto}" == "tcp" || "${proto}" == "udp" ]] || return 0
 
-  while IFS= read -r line; do
+  while IFS= read -r line || [[ -n "${line}" ]]; do
     [[ -n "${line}" ]] || continue
 
     normalized_line="$(printf '%s\n' "${line}" | tr -s '[:space:]' ' ')"
@@ -2070,7 +1950,22 @@ nftables_runtime_allowed_ports_by_proto() {
     segment="${normalized_line%% accept*}"
     segment="${segment#*${proto} dport }"
     nftables_expand_port_spec_tokens "${segment}"
-  done < <(nftables_runtime_input_chain_lines) | sort -u
+  done | sort -n -u
+}
+
+nftables_runtime_allowed_ports_by_proto() {
+  local proto="${1:-}"
+  local input_chain_lines=""
+
+  [[ "${proto}" == "tcp" || "${proto}" == "udp" ]] || return 0
+
+  input_chain_lines="$(nftables_runtime_input_chain_lines || true)"
+  if [[ -z "${input_chain_lines}" ]]; then
+    input_chain_lines="$(nftables_config_input_chain_lines || true)"
+  fi
+  [[ -n "${input_chain_lines}" ]] || return 0
+
+  printf '%s\n' "${input_chain_lines}" | nftables_allowed_ports_from_input_chain_by_proto "${proto}"
 }
 
 nftables_runtime_allowed_tcp_ports() {
@@ -2079,275 +1974,6 @@ nftables_runtime_allowed_tcp_ports() {
 
 nftables_runtime_allowed_udp_ports() {
   nftables_runtime_allowed_ports_by_proto "udp"
-}
-
-nftables_ensure_extra_ports_block() {
-  local file=""
-  local begin_marker=""
-  local end_marker=""
-  local marker_pair=""
-  local tmp_file=""
-
-  file="$(nftables_config_path)"
-  [[ -f "${file}" ]] || die "nftables 配置不存在：${file}。请先完成初始化中的 nftables 步骤。"
-  marker_pair="$(nftables_detect_extra_ports_markers || true)"
-  if [[ -n "${marker_pair}" ]]; then
-    return 0
-  fi
-
-  begin_marker="$(nftables_extra_ports_begin_marker)"
-  end_marker="$(nftables_extra_ports_end_marker)"
-
-  tmp_file="$(mktemp)"
-  awk -v begin_marker="${begin_marker}" -v end_marker="${end_marker}" '
-    /chain input[[:space:]]*\{/ { in_input = 1 }
-    in_input && /^[[:space:]]*}$/ && !inserted {
-      print "    " begin_marker
-      print "    " end_marker
-      inserted = 1
-      in_input = 0
-    }
-    { print }
-    END {
-      if (!inserted) {
-        exit 1
-      }
-    }
-  ' "${file}" >"${tmp_file}" || {
-    rm -f "${tmp_file}"
-    die "无法在 ${file} 中插入受控端口块，请先检查当前 nftables 配置格式。"
-  }
-
-  replace_file_with_tmp_if_changed "${file}" "${tmp_file}" "true"
-}
-
-nftables_write_managed_extra_ports_block() {
-  local file=""
-  local begin_marker=""
-  local end_marker=""
-  local marker_pair=""
-  local tmp_file=""
-  local block_file=""
-
-  file="$(nftables_config_path)"
-  nftables_ensure_extra_ports_block
-  marker_pair="$(nftables_detect_extra_ports_markers)"
-  IFS=$'\t' read -r begin_marker end_marker <<<"${marker_pair}"
-
-  tmp_file="$(mktemp)"
-  block_file="$(mktemp)"
-  render_nftables_managed_extra_block "$@" >"${block_file}"
-
-  awk -v begin_marker="${begin_marker}" -v end_marker="${end_marker}" -v block_file="${block_file}" '
-    {
-      if (index($0, begin_marker)) {
-        print
-        while ((getline line < block_file) > 0) {
-          print line
-        }
-        in_block = 1
-        next
-      }
-      if (in_block) {
-        if (index($0, end_marker)) {
-          print
-          in_block = 0
-        }
-        next
-      }
-      print
-    }
-  ' "${file}" >"${tmp_file}"
-
-  rm -f "${block_file}"
-  replace_file_with_tmp_if_changed "${file}" "${tmp_file}" "true"
-}
-
-nftables_write_managed_extra_tcp_ports() {
-  local normalized_ports=()
-  local existing_udp_ports=()
-
-  if (($# > 0)); then
-    mapfile -t normalized_ports < <(normalize_numeric_port_list "$@")
-  fi
-  mapfile -t existing_udp_ports < <(nftables_list_managed_extra_udp_ports)
-
-  nftables_write_managed_extra_ports_block --tcp "${normalized_ports[@]}" --udp "${existing_udp_ports[@]}"
-}
-
-nftables_write_managed_extra_udp_ports() {
-  local normalized_ports=()
-  local existing_tcp_ports=()
-
-  if (($# > 0)); then
-    mapfile -t normalized_ports < <(normalize_numeric_port_list "$@")
-  fi
-  mapfile -t existing_tcp_ports < <(nftables_list_managed_extra_tcp_ports)
-
-  nftables_write_managed_extra_ports_block --tcp "${existing_tcp_ports[@]}" --udp "${normalized_ports[@]}"
-}
-
-nftables_reload_and_validate() {
-  local file=""
-  file="$(nftables_config_path)"
-
-  [[ -f "${file}" ]] || die "nftables 配置不存在：${file}。"
-
-  require_root
-  require_debian12
-  apt_install_packages nftables
-  run_cmd "Checking nftables syntax" nft -c -f "${file}"
-  enable_and_start_service "nftables"
-  run_cmd "Loading nftables rules" nft -f "${file}"
-}
-
-nftables_open_tcp_ports() {
-  local existing_ports=()
-  local requested_ports=()
-  local merged_ports=()
-
-  mapfile -t existing_ports < <(nftables_list_managed_extra_tcp_ports)
-  mapfile -t requested_ports < <(normalize_numeric_port_list "$@")
-  mapfile -t merged_ports < <(normalize_numeric_port_list "${existing_ports[@]}" "${requested_ports[@]}")
-
-  nftables_write_managed_extra_tcp_ports "${merged_ports[@]}"
-  nftables_reload_and_validate
-}
-
-nftables_open_udp_ports() {
-  local existing_ports=()
-  local requested_ports=()
-  local merged_ports=()
-
-  mapfile -t existing_ports < <(nftables_list_managed_extra_udp_ports)
-  mapfile -t requested_ports < <(normalize_numeric_port_list "$@")
-  mapfile -t merged_ports < <(normalize_numeric_port_list "${existing_ports[@]}" "${requested_ports[@]}")
-
-  nftables_write_managed_extra_udp_ports "${merged_ports[@]}"
-  nftables_reload_and_validate
-}
-
-nftables_open_tcp_udp_ports() {
-  local existing_tcp_ports=()
-  local existing_udp_ports=()
-  local requested_ports=()
-  local merged_tcp_ports=()
-  local merged_udp_ports=()
-
-  mapfile -t existing_tcp_ports < <(nftables_list_managed_extra_tcp_ports)
-  mapfile -t existing_udp_ports < <(nftables_list_managed_extra_udp_ports)
-  mapfile -t requested_ports < <(normalize_numeric_port_list "$@")
-  mapfile -t merged_tcp_ports < <(normalize_numeric_port_list "${existing_tcp_ports[@]}" "${requested_ports[@]}")
-  mapfile -t merged_udp_ports < <(normalize_numeric_port_list "${existing_udp_ports[@]}" "${requested_ports[@]}")
-
-  nftables_write_managed_extra_ports_block --tcp "${merged_tcp_ports[@]}" --udp "${merged_udp_ports[@]}"
-  nftables_reload_and_validate
-}
-
-nftables_close_tcp_ports() {
-  local existing_ports=()
-  local requested_ports=()
-  local remaining_ports=()
-  local port=""
-
-  mapfile -t existing_ports < <(nftables_list_managed_extra_tcp_ports)
-  mapfile -t requested_ports < <(normalize_numeric_port_list "$@")
-
-  for port in "${existing_ports[@]}"; do
-    if ! selection_contains "${port}" "${requested_ports[@]}"; then
-      remaining_ports+=("${port}")
-    fi
-  done
-
-  nftables_write_managed_extra_tcp_ports "${remaining_ports[@]}"
-  nftables_reload_and_validate
-}
-
-nftables_close_udp_ports() {
-  local existing_ports=()
-  local requested_ports=()
-  local remaining_ports=()
-  local port=""
-
-  mapfile -t existing_ports < <(nftables_list_managed_extra_udp_ports)
-  mapfile -t requested_ports < <(normalize_numeric_port_list "$@")
-
-  for port in "${existing_ports[@]}"; do
-    if ! selection_contains "${port}" "${requested_ports[@]}"; then
-      remaining_ports+=("${port}")
-    fi
-  done
-
-  nftables_write_managed_extra_udp_ports "${remaining_ports[@]}"
-  nftables_reload_and_validate
-}
-
-nftables_close_tcp_udp_ports() {
-  local existing_tcp_ports=()
-  local existing_udp_ports=()
-  local requested_ports=()
-  local remaining_tcp_ports=()
-  local remaining_udp_ports=()
-  local port=""
-
-  mapfile -t existing_tcp_ports < <(nftables_list_managed_extra_tcp_ports)
-  mapfile -t existing_udp_ports < <(nftables_list_managed_extra_udp_ports)
-  mapfile -t requested_ports < <(normalize_numeric_port_list "$@")
-
-  for port in "${existing_tcp_ports[@]}"; do
-    if ! selection_contains "${port}" "${requested_ports[@]}"; then
-      remaining_tcp_ports+=("${port}")
-    fi
-  done
-
-  for port in "${existing_udp_ports[@]}"; do
-    if ! selection_contains "${port}" "${requested_ports[@]}"; then
-      remaining_udp_ports+=("${port}")
-    fi
-  done
-
-  nftables_write_managed_extra_ports_block --tcp "${remaining_tcp_ports[@]}" --udp "${remaining_udp_ports[@]}"
-  nftables_reload_and_validate
-}
-
-nftables_open_ports_by_proto() {
-  local proto="${1:-}"
-  shift || true
-
-  case "${proto}" in
-    tcp)
-      nftables_open_tcp_ports "$@"
-      ;;
-    udp)
-      nftables_open_udp_ports "$@"
-      ;;
-    tcp_udp)
-      nftables_open_tcp_udp_ports "$@"
-      ;;
-    *)
-      die "Unsupported protocol for nftables_open_ports_by_proto: ${proto}"
-      ;;
-  esac
-}
-
-nftables_close_ports_by_proto() {
-  local proto="${1:-}"
-  shift || true
-
-  case "${proto}" in
-    tcp)
-      nftables_close_tcp_ports "$@"
-      ;;
-    udp)
-      nftables_close_udp_ports "$@"
-      ;;
-    tcp_udp)
-      nftables_close_tcp_udp_ports "$@"
-      ;;
-    *)
-      die "Unsupported protocol for nftables_close_ports_by_proto: ${proto}"
-      ;;
-  esac
 }
 
 apply_sysctl_dropin() {

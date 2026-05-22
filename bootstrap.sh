@@ -1099,7 +1099,6 @@ render_maintain_menu_prompt() {
   header+=$'99. 退出脚本\n\n'
   header+=$'输入规则：\n'
   header+=$'- 输入单个数字直接执行对应项目\n'
-  header+=$'- 输入 3，进入端口管理子菜单；顺序执行时第 3 项只做查看，不进入子菜单\n'
   header+=$'- 输入多个数字，例如 1,2,3，按输入顺序执行这些项目\n'
   header+=$'- 输入 9，顺序执行 1 到 8\n'
 
@@ -1144,238 +1143,6 @@ prompt_maintain_execution_input() {
 prompt_network_execution_input() {
   ui_clear_screen || true
   ui_prompt_input "网络调优子菜单" "$(render_network_menu_prompt)"
-}
-
-split_port_input_tokens() {
-  local raw_input="$1"
-  printf '%s\n' "${raw_input}" | tr ', ' '\n\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d'
-}
-
-normalize_port_input_list_safe() {
-  local raw_input="$1"
-  local token=""
-  local error_message=""
-  local normalized_ports=()
-
-  while IFS= read -r token; do
-    [[ -n "${token}" ]] || continue
-    error_message="$(port_validation_error_zh "${token}")"
-    [[ -z "${error_message}" ]] || return 1
-    normalized_ports+=("$((10#${token}))")
-  done < <(split_port_input_tokens "${raw_input}")
-
-  ((${#normalized_ports[@]} > 0)) || return 1
-  normalize_numeric_port_list "${normalized_ports[@]}"
-}
-
-port_protocol_label_zh() {
-  case "${1:-}" in
-    tcp) printf '%s\n' "TCP" ;;
-    udp) printf '%s\n' "UDP" ;;
-    tcp_udp) printf '%s\n' "TCP+UDP" ;;
-    *) printf '%s\n' "未知协议" ;;
-  esac
-}
-
-port_management_notice_text() {
-  cat <<'EOF'
-注意：
-- 这里只会修改服务器内部的 nftables 规则
-- 如果云厂商还有安全组/云防火墙，也必须去控制台同步放行或关闭
-- 否则公网访问结果可能与本机规则不一致
-EOF
-}
-
-render_port_management_prompt() {
-  cat <<'EOF'
-1. 查看当前监听端口与当前 nftables 规则
-2. 开放一个端口
-3. 关闭一个端口
-4. 批量开放端口
-5. 批量关闭端口
-6. 重载并验证 nftables
-0. 返回上一级菜单
-99. 退出脚本
-
-输入规则：
-- 输入 1 查看当前监听端口和 nftables 规则
-- 输入 2/3/4/5 后会继续让你选择协议（TCP、UDP 或 TCP+UDP）
-- 输入 2/3 对单个端口做开放或关闭
-- 输入 4/5 可输入多个端口，例如 80,443
-- 所有开放/关闭动作都只修改本机 nftables，云厂商安全组/云防火墙也必须同步处理
-EOF
-}
-
-prompt_port_management_input() {
-  ui_clear_screen || true
-  ui_prompt_input "端口管理子菜单" "$(render_port_management_prompt)"
-}
-
-run_port_management_overview() {
-  printf '\n%s\n\n' "$(port_management_notice_text)"
-  run_script_path "${PROJECT_ROOT}/maintenance/22_audit_firewall.sh"
-}
-
-prompt_port_management_protocol() {
-  local title="$1"
-  local choice=""
-
-  while true; do
-    if ! ui_prompt_input "${title}" $'请选择协议：\n1. TCP\n2. UDP\n3. TCP+UDP\n0. 返回上一步\n99. 退出脚本'; then
-      return 1
-    fi
-
-    choice="$(ui_trim_value "${UI_LAST_INPUT}")"
-    case "${choice}" in
-      99)
-        ui_exit_script
-        ;;
-      0)
-        return 1
-        ;;
-      1)
-        printf '%s\n' "tcp"
-        return 0
-        ;;
-      2)
-        printf '%s\n' "udp"
-        return 0
-        ;;
-      3)
-        printf '%s\n' "tcp_udp"
-        return 0
-        ;;
-      *)
-        ui_warn_message "输入无效" "只支持输入 1、2、3、0 或 99。"
-        ;;
-    esac
-  done
-}
-
-prompt_port_list_for_management() {
-  local title="$1"
-  local prompt="$2"
-  local allow_multiple="${3:-false}"
-  local raw_input=""
-  local ports=()
-
-  while true; do
-    if ! ui_prompt_input "${title}" "${prompt}\n0 = 返回上一级菜单"; then
-      return 1
-    fi
-
-    raw_input="$(ui_trim_value "${UI_LAST_INPUT}")"
-    if [[ "${raw_input}" == "0" ]]; then
-      return 1
-    fi
-
-    if [[ -z "${raw_input}" ]]; then
-      ui_warn_message "输入为空" "请输入端口号；多个端口可用逗号分隔。"
-      continue
-    fi
-
-    mapfile -t ports < <(normalize_port_input_list_safe "${raw_input}" || true)
-    ((${#ports[@]} > 0)) || {
-      ui_warn_message "输入无效" "端口必须是 1 到 65535 之间的数字；多个端口请用逗号分隔。"
-      continue
-    }
-
-    if [[ "${allow_multiple}" != "true" && ${#ports[@]} -ne 1 ]]; then
-      ui_warn_message "输入无效" "这里只允许输入一个端口。"
-      continue
-    fi
-
-    printf '%s\n' "${ports[@]}"
-    return 0
-  done
-}
-
-confirm_port_management_change() {
-  local title="$1"
-  local proto="$2"
-  shift 2 || true
-  local proto_label=""
-  local ports_text=""
-  local port=""
-
-  proto_label="$(port_protocol_label_zh "${proto}")"
-  for port in "$@"; do
-    if [[ -n "${ports_text}" ]]; then
-      ports_text+=", "
-    fi
-    ports_text+="${port}"
-  done
-
-  ui_confirm_with_back "${title}" "$(port_management_notice_text)\n\n协议：${proto_label}\n目标端口：${ports_text}"
-}
-
-menu_port_management_phase() {
-  while true; do
-    local raw_input=""
-    if ! prompt_port_management_input; then
-      return 0
-    fi
-    raw_input="$(ui_trim_value "${UI_LAST_INPUT}")"
-
-    case "${raw_input}" in
-      0)
-        return 0
-        ;;
-      99)
-        ui_exit_script
-        ;;
-      1)
-        menu_execute_with_feedback "查看当前监听端口与 nftables 规则" run_port_management_overview || true
-        ;;
-      2)
-        local proto=""
-        local ports=()
-        proto="$(prompt_port_management_protocol "开放一个端口" || true)"
-        [[ -n "${proto}" ]] || continue
-        mapfile -t ports < <(prompt_port_list_for_management "开放一个端口" "请输入要开放的端口号：" "false" || true)
-        ((${#ports[@]} > 0)) || continue
-        confirm_port_management_change "确认开放端口" "${proto}" "${ports[@]}" || continue
-        menu_execute_with_feedback "开放 $(port_protocol_label_zh "${proto}") 端口 ${ports[0]}" nftables_open_ports_by_proto "${proto}" "${ports[@]}" || true
-        ;;
-      3)
-        local proto=""
-        local ports=()
-        proto="$(prompt_port_management_protocol "关闭一个端口" || true)"
-        [[ -n "${proto}" ]] || continue
-        mapfile -t ports < <(prompt_port_list_for_management "关闭一个端口" "请输入要关闭的端口号：" "false" || true)
-        ((${#ports[@]} > 0)) || continue
-        confirm_port_management_change "确认关闭端口" "${proto}" "${ports[@]}" || continue
-        menu_execute_with_feedback "关闭 $(port_protocol_label_zh "${proto}") 端口 ${ports[0]}" nftables_close_ports_by_proto "${proto}" "${ports[@]}" || true
-        ;;
-      4)
-        local proto=""
-        local ports=()
-        proto="$(prompt_port_management_protocol "批量开放端口" || true)"
-        [[ -n "${proto}" ]] || continue
-        mapfile -t ports < <(prompt_port_list_for_management "批量开放端口" "请输入要批量开放的端口，多个端口可用逗号分隔，例如 80,443：" "true" || true)
-        ((${#ports[@]} > 0)) || continue
-        confirm_port_management_change "确认批量开放端口" "${proto}" "${ports[@]}" || continue
-        menu_execute_with_feedback "批量开放 $(port_protocol_label_zh "${proto}") 端口" nftables_open_ports_by_proto "${proto}" "${ports[@]}" || true
-        ;;
-      5)
-        local proto=""
-        local ports=()
-        proto="$(prompt_port_management_protocol "批量关闭端口" || true)"
-        [[ -n "${proto}" ]] || continue
-        mapfile -t ports < <(prompt_port_list_for_management "批量关闭端口" "请输入要批量关闭的端口，多个端口可用逗号分隔，例如 80,443：" "true" || true)
-        ((${#ports[@]} > 0)) || continue
-        confirm_port_management_change "确认批量关闭端口" "${proto}" "${ports[@]}" || continue
-        menu_execute_with_feedback "批量关闭 $(port_protocol_label_zh "${proto}") 端口" nftables_close_ports_by_proto "${proto}" "${ports[@]}" || true
-        ;;
-      6)
-        ui_confirm_with_back "确认重载 nftables" "$(port_management_notice_text)\n\n即将重新校验并加载 /etc/nftables.conf。" || continue
-        menu_execute_with_feedback "重载并验证 nftables" nftables_reload_and_validate || true
-        ;;
-      *)
-        ui_warn_message "输入无效" "端口管理子菜单只支持输入 1、2、3、4、5、6、0 或 99。"
-        ;;
-    esac
-  done
 }
 
 confirm_maintain_sequence() {
@@ -1608,10 +1375,6 @@ menu_maintain_phase() {
       99)
         ui_exit_script
         ;;
-      3)
-        menu_port_management_phase
-        continue
-        ;;
       9)
         local sequence_ids=()
         local sequence_summary=""
@@ -1648,8 +1411,8 @@ menu_maintain_phase() {
       continue
     fi
 
-    if selection_contains "3" "${raw_tokens[@]}" || selection_contains "9" "${raw_tokens[@]}"; then
-      ui_warn_message "输入无效" "3 和 9 是特殊入口，请单独输入。"
+    if selection_contains "9" "${raw_tokens[@]}"; then
+      ui_warn_message "输入无效" "9 是特殊入口，请单独输入。"
       continue
     fi
 
