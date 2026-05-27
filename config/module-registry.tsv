@@ -12,7 +12,7 @@ step_no	module_id	phase	title_zh	short_desc_zh	risk_level	default_enabled	depend
 11	11_verify	init	验收第 1-10 步的实际结果	直接检查系统真实状态、配置文件、服务状态和 SSH/登录日志，解释当前为什么会是这样。	low	true	025_change_ssh_port,03_admin_access_stage,07_switch_admin_login,06_nftables,07_time_sync,08_auto_updates,09_fail2ban,10_swap	modules/11_verify.sh	该步骤是初始化收口验收，不再只看 state。它会分项输出 Current / Expected / Evidence / Conclusion，并把原本的摘要提醒一并合并进来。
 1	20_update_system	maintain	定期更新系统软件	刷新索引、安装系统更新，并清理不再需要的软件包。	medium	true	-	maintenance/20_update_system.sh	适合定期执行的保守型系统维护动作，用于减少系统落后版本积压，保持基础软件包处于较新状态。
 2	21_audit_users_ssh	maintain	审查用户、sudo 和 SSH 密钥	检查交互式用户、sudo 成员以及各用户 authorized_keys 情况。	medium	true	-	maintenance/21_audit_users_ssh.sh	该任务用于发现多余账号、遗留 sudo 权限和未审查的 SSH 公钥，适合在人员或运维方式发生变化后重点检查。
-3	22_audit_firewall	maintain	防火墙与端口审查	只读查看当前监听端口、nftables 服务状态、配置文件状态和显式放行端口。	medium	true	-	maintenance/22_audit_firewall.sh	该入口只做审查，不开放、关闭或批量修改端口；如果云厂商还有安全组或云防火墙，应在云控制台单独审查。
+3	22_audit_firewall	maintain	防火墙与端口管理	查看当前监听端口、nftables 状态和显式放行端口，并可打开或关闭受控入站端口。	high	true	-	maintenance/22_audit_firewall.sh	该入口只管理 /etc/nftables.conf 中 VPS EXTRA PORTS 受控区块的 TCP/UDP 入站端口，不提供 DNAT、SNAT、MASQUERADE、端口转发或 NAT 转发；如果云厂商还有安全组或云防火墙，也需要在云控制台同步调整。
 4	23_audit_fail2ban_logs	maintain	检查 Fail2Ban 与登录日志	查看 Fail2Ban 状态和近期 SSH 登录失败情况。	medium	true	-	maintenance/23_audit_fail2ban_logs.sh	该任务用于判断最近是否存在异常登录尝试、误封、封禁效果不明显等情况，是 SSH 风险巡检的重要组成部分。
 5	24_monitor_basic	maintain	查看基础资源与服务健康	查看 CPU、内存、磁盘、网络套接字和失败的 systemd 服务。	low	true	-	maintenance/24_monitor_basic.sh	该任务用于快速了解机器的基本健康度，适合排查“机器卡顿”“磁盘满了”“服务异常退出”等常见问题。
 6	26_backup_check	maintain	检查备份与恢复准备情况	检查常见备份工具、相关定时器和近期备份痕迹，并提醒做恢复演练。	medium	true	-	maintenance/26_backup_check.sh	该任务不会直接调用云厂商 API，也不会自动恢复数据；重点是提醒你验证“有没有备份”和“能不能真正恢复”。

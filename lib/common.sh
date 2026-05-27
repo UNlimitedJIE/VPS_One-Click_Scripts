@@ -1976,6 +1976,284 @@ nftables_runtime_allowed_udp_ports() {
   nftables_runtime_allowed_ports_by_proto "udp"
 }
 
+nftables_extra_ports_begin_marker() {
+  printf '%s\n' "# BEGIN VPS EXTRA PORTS"
+}
+
+nftables_extra_ports_end_marker() {
+  printf '%s\n' "# END VPS EXTRA PORTS"
+}
+
+nftables_config_has_extra_ports_block() {
+  local file=""
+  local begin_marker=""
+  local end_marker=""
+
+  file="$(nftables_config_path)"
+  begin_marker="$(nftables_extra_ports_begin_marker)"
+  end_marker="$(nftables_extra_ports_end_marker)"
+
+  [[ -f "${file}" ]] || return 1
+  grep -Fq "${begin_marker}" "${file}" || return 1
+  grep -Fq "${end_marker}" "${file}" || return 1
+}
+
+nftables_extra_ports_block_lines() {
+  local file=""
+  local begin_marker=""
+  local end_marker=""
+
+  file="$(nftables_config_path)"
+  begin_marker="$(nftables_extra_ports_begin_marker)"
+  end_marker="$(nftables_extra_ports_end_marker)"
+
+  [[ -f "${file}" ]] || return 0
+
+  awk -v begin_marker="${begin_marker}" -v end_marker="${end_marker}" '
+    index($0, begin_marker) {
+      in_block = 1
+      next
+    }
+    index($0, end_marker) {
+      in_block = 0
+      next
+    }
+    in_block {
+      print
+    }
+  ' "${file}" || true
+}
+
+nftables_managed_extra_ports_by_proto() {
+  local proto="${1:-}"
+
+  [[ "${proto}" == "tcp" || "${proto}" == "udp" ]] || return 0
+  nftables_extra_ports_block_lines | nftables_allowed_ports_from_input_chain_by_proto "${proto}"
+}
+
+nftables_ports_csv() {
+  local joined=""
+  local port=""
+
+  for port in "$@"; do
+    [[ -n "${port}" ]] || continue
+    if [[ -z "${joined}" ]]; then
+      joined="${port}"
+    else
+      joined="${joined}, ${port}"
+    fi
+  done
+
+  printf '%s\n' "${joined}"
+}
+
+nftables_render_extra_ports_block() {
+  local tcp_csv="${1:-}"
+  local udp_csv="${2:-}"
+
+  if [[ -n "${tcp_csv}" ]]; then
+    printf '    tcp dport { %s } accept comment "VPS extra TCP ports"\n' "${tcp_csv}"
+  fi
+
+  if [[ -n "${udp_csv}" ]]; then
+    printf '    udp dport { %s } accept comment "VPS extra UDP ports"\n' "${udp_csv}"
+  fi
+
+  return 0
+}
+
+nftables_generate_config_with_extra_ports_block() {
+  local block_content="${1:-}"
+  local output_file="$2"
+  local file=""
+  local begin_marker=""
+  local end_marker=""
+  local block_file=""
+
+  file="$(nftables_config_path)"
+  begin_marker="$(nftables_extra_ports_begin_marker)"
+  end_marker="$(nftables_extra_ports_end_marker)"
+  block_file="$(mktemp)"
+
+  if [[ -n "${block_content}" ]]; then
+    printf '%s\n' "${block_content}" >"${block_file}"
+  else
+    : >"${block_file}"
+  fi
+
+  awk -v begin_marker="${begin_marker}" -v end_marker="${end_marker}" -v block_file="${block_file}" '
+    index($0, begin_marker) {
+      print
+      while ((getline line < block_file) > 0) {
+        print line
+      }
+      in_block = 1
+      next
+    }
+    in_block && index($0, end_marker) {
+      print
+      in_block = 0
+      next
+    }
+    in_block {
+      next
+    }
+    {
+      print
+    }
+  ' "${file}" >"${output_file}"
+
+  rm -f "${block_file}"
+}
+
+nftables_reload_and_validate() {
+  local file=""
+
+  file="$(nftables_config_path)"
+  [[ -f "${file}" ]] || die "nftables config not found: ${file}"
+  command_exists nft || die "nft command not found. Install nftables first."
+
+  run_cmd "Checking nftables syntax" nft -c -f "${file}"
+  run_cmd "Loading nftables rules" nft -f "${file}"
+  if service_exists "nftables"; then
+    run_cmd "Enabling nftables service" systemctl enable nftables
+  fi
+}
+
+nftables_update_extra_ports_by_proto() {
+  local action="${1:-}"
+  local proto="${2:-}"
+  shift 2 || true
+
+  [[ "${action}" == "open" || "${action}" == "close" ]] || die "Unsupported nftables port action: ${action}"
+  [[ "${proto}" == "tcp" || "${proto}" == "udp" ]] || die "Unsupported nftables protocol: ${proto}"
+  nftables_config_has_extra_ports_block || die "nftables extra ports block not found in $(nftables_config_path). Run 06_nftables once before managing extra ports."
+
+  local requested_ports=()
+  local current_tcp_ports=()
+  local current_udp_ports=()
+  local new_ports=()
+  local port=""
+  local current_ssh=""
+  local tcp_csv=""
+  local udp_csv=""
+  local block_content=""
+  local tmp_file=""
+
+  while IFS= read -r port; do
+    [[ -n "${port}" ]] && requested_ports+=("${port}")
+  done < <(normalize_numeric_port_list "$@")
+  ((${#requested_ports[@]} > 0)) || die "No valid ports were provided."
+
+  if [[ "${action}" == "close" && "${proto}" == "tcp" ]]; then
+    current_ssh="$(current_ssh_port 2>/dev/null || true)"
+    current_ssh="${current_ssh:-22}"
+    for port in "${requested_ports[@]}"; do
+      [[ "${port}" != "${current_ssh}" ]] || die "Refusing to close current SSH port ${current_ssh}."
+    done
+  fi
+
+  while IFS= read -r port; do
+    [[ -n "${port}" ]] && current_tcp_ports+=("${port}")
+  done < <(nftables_managed_extra_ports_by_proto "tcp")
+  while IFS= read -r port; do
+    [[ -n "${port}" ]] && current_udp_ports+=("${port}")
+  done < <(nftables_managed_extra_ports_by_proto "udp")
+
+  if [[ "${action}" == "open" ]]; then
+    if [[ "${proto}" == "tcp" ]]; then
+      new_ports=()
+      while IFS= read -r port; do
+        [[ -n "${port}" ]] && new_ports+=("${port}")
+      done < <(
+        if ((${#current_tcp_ports[@]} > 0)); then
+          normalize_numeric_port_list "${current_tcp_ports[@]}" "${requested_ports[@]}"
+        else
+          normalize_numeric_port_list "${requested_ports[@]}"
+        fi
+      )
+      if ((${#new_ports[@]} > 0)); then
+        current_tcp_ports=("${new_ports[@]}")
+      else
+        current_tcp_ports=()
+      fi
+    else
+      new_ports=()
+      while IFS= read -r port; do
+        [[ -n "${port}" ]] && new_ports+=("${port}")
+      done < <(
+        if ((${#current_udp_ports[@]} > 0)); then
+          normalize_numeric_port_list "${current_udp_ports[@]}" "${requested_ports[@]}"
+        else
+          normalize_numeric_port_list "${requested_ports[@]}"
+        fi
+      )
+      if ((${#new_ports[@]} > 0)); then
+        current_udp_ports=("${new_ports[@]}")
+      else
+        current_udp_ports=()
+      fi
+    fi
+  else
+    if [[ "${proto}" == "tcp" ]]; then
+      new_ports=()
+      if ((${#current_tcp_ports[@]} > 0)); then
+        for port in "${current_tcp_ports[@]}"; do
+          selection_contains "${port}" "${requested_ports[@]}" || new_ports+=("${port}")
+        done
+      fi
+      if ((${#new_ports[@]} > 0)); then
+        current_tcp_ports=("${new_ports[@]}")
+      else
+        current_tcp_ports=()
+      fi
+    else
+      new_ports=()
+      if ((${#current_udp_ports[@]} > 0)); then
+        for port in "${current_udp_ports[@]}"; do
+          selection_contains "${port}" "${requested_ports[@]}" || new_ports+=("${port}")
+        done
+      fi
+      if ((${#new_ports[@]} > 0)); then
+        current_udp_ports=("${new_ports[@]}")
+      else
+        current_udp_ports=()
+      fi
+    fi
+  fi
+
+  if ((${#current_tcp_ports[@]} > 0)); then
+    tcp_csv="$(nftables_ports_csv "${current_tcp_ports[@]}")"
+  fi
+  if ((${#current_udp_ports[@]} > 0)); then
+    udp_csv="$(nftables_ports_csv "${current_udp_ports[@]}")"
+  fi
+  block_content="$(nftables_render_extra_ports_block "${tcp_csv}" "${udp_csv}")"
+
+  tmp_file="$(mktemp)"
+  nftables_generate_config_with_extra_ports_block "${block_content}" "${tmp_file}"
+  chmod 0644 "${tmp_file}" 2>/dev/null || true
+
+  if is_false "${PLAN_ONLY:-false}" && is_false "${DRY_RUN:-false}" && command_exists nft; then
+    nft -c -f "${tmp_file}"
+  fi
+
+  replace_file_with_tmp_if_changed "$(nftables_config_path)" "${tmp_file}" "true"
+  nftables_reload_and_validate
+}
+
+nftables_open_ports_by_proto() {
+  local proto="${1:-}"
+  shift || true
+  nftables_update_extra_ports_by_proto "open" "${proto}" "$@"
+}
+
+nftables_close_ports_by_proto() {
+  local proto="${1:-}"
+  shift || true
+  nftables_update_extra_ports_by_proto "close" "${proto}" "$@"
+}
+
 apply_sysctl_dropin() {
   local target="$1"
   local content="$2"
