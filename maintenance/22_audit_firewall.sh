@@ -186,6 +186,7 @@ parse_firewall_ports_input() {
   local token=""
   local validation_error=""
   PARSED_FIREWALL_PORTS=()
+  PARSED_FIREWALL_PORTS_ERROR=""
 
   while IFS= read -r token; do
     token="$(ui_trim_value "${token}")"
@@ -193,16 +194,16 @@ parse_firewall_ports_input() {
 
     validation_error="$(port_validation_error_zh "${token}")"
     if [[ -n "${validation_error}" ]]; then
-      printf '%s\n' "${validation_error}"
+      PARSED_FIREWALL_PORTS_ERROR="${validation_error}"
       return 1
     fi
-    if ! selection_contains "${token}" "${PARSED_FIREWALL_PORTS[@]}"; then
+    if ((${#PARSED_FIREWALL_PORTS[@]} == 0)) || ! selection_contains "${token}" "${PARSED_FIREWALL_PORTS[@]}"; then
       PARSED_FIREWALL_PORTS+=("${token}")
     fi
   done < <(printf '%s\n' "${raw}" | tr ',，;； ' '\n\n\n\n\n')
 
   ((${#PARSED_FIREWALL_PORTS[@]} > 0)) || {
-    printf '%s\n' "端口不能为空。"
+    PARSED_FIREWALL_PORTS_ERROR="端口不能为空。"
     return 1
   }
 
@@ -212,19 +213,17 @@ parse_firewall_ports_input() {
 prompt_firewall_ports() {
   local title="$1"
   local raw=""
-  local validation_error=""
 
   while true; do
     ui_prompt_input "${title}" "请输入端口，支持逗号或空格分隔。\n输入 0 返回上一级菜单。\n输入 99 退出脚本：" || return 1
     raw="$(ui_trim_value "${UI_LAST_INPUT}")"
     [[ "${raw}" != "0" ]] || return 1
 
-    validation_error="$(parse_firewall_ports_input "${raw}" || true)"
-    if [[ -z "${validation_error}" ]]; then
+    if parse_firewall_ports_input "${raw}"; then
       return 0
     fi
 
-    ui_warn_message "端口无效" "${validation_error}"
+    ui_warn_message "端口无效" "${PARSED_FIREWALL_PORTS_ERROR:-端口输入无效。}"
   done
 }
 

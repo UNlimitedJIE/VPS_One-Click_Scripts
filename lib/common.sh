@@ -2083,11 +2083,13 @@ nftables_generate_config_with_extra_ports_block() {
       next
     }
     in_block && index($0, end_marker) {
-      print
       in_block = 0
       next
     }
     in_block {
+      next
+    }
+    !in_block && index($0, end_marker) {
       next
     }
     !in_input && $0 ~ /chain[[:space:]]+input[[:space:]]*\{/ {
