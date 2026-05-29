@@ -321,7 +321,7 @@ main() {
     return 0
   fi
 
-  if is_true "${MENU_EXECUTION_SCREEN_MODE:-false}" && ui_require_interactive; then
+  if ui_require_interactive; then
     firewall_port_management_menu
     return 0
   fi

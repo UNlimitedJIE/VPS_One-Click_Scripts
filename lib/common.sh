@@ -1984,20 +1984,6 @@ nftables_extra_ports_end_marker() {
   printf '%s\n' "# END VPS EXTRA PORTS"
 }
 
-nftables_config_has_extra_ports_block() {
-  local file=""
-  local begin_marker=""
-  local end_marker=""
-
-  file="$(nftables_config_path)"
-  begin_marker="$(nftables_extra_ports_begin_marker)"
-  end_marker="$(nftables_extra_ports_end_marker)"
-
-  [[ -f "${file}" ]] || return 1
-  grep -Fq "${begin_marker}" "${file}" || return 1
-  grep -Fq "${end_marker}" "${file}" || return 1
-}
-
 nftables_extra_ports_block_lines() {
   local file=""
   local begin_marker=""
@@ -2081,12 +2067,18 @@ nftables_generate_config_with_extra_ports_block() {
     : >"${block_file}"
   fi
 
-  awk -v begin_marker="${begin_marker}" -v end_marker="${end_marker}" -v block_file="${block_file}" '
-    index($0, begin_marker) {
-      print
+  if ! awk -v begin_marker="${begin_marker}" -v end_marker="${end_marker}" -v block_file="${block_file}" '
+    function emit_block() {
+      print begin_marker
       while ((getline line < block_file) > 0) {
         print line
       }
+      close(block_file)
+      print end_marker
+      block_emitted = 1
+    }
+    index($0, begin_marker) {
+      emit_block()
       in_block = 1
       next
     }
@@ -2098,10 +2090,31 @@ nftables_generate_config_with_extra_ports_block() {
     in_block {
       next
     }
+    !in_input && $0 ~ /chain[[:space:]]+input[[:space:]]*\{/ {
+      in_input = 1
+      print
+      next
+    }
+    in_input && $0 ~ /^[[:space:]]*}/ {
+      if (!block_emitted) {
+        emit_block()
+      }
+      in_input = 0
+      print
+      next
+    }
     {
       print
     }
-  ' "${file}" >"${output_file}"
+    END {
+      if (!block_emitted) {
+        exit 42
+      }
+    }
+  ' "${file}" >"${output_file}"; then
+    rm -f "${block_file}" "${output_file}"
+    die "Unable to find nftables input chain or managed extra ports block in ${file}."
+  fi
 
   rm -f "${block_file}"
 }
@@ -2127,7 +2140,7 @@ nftables_update_extra_ports_by_proto() {
 
   [[ "${action}" == "open" || "${action}" == "close" ]] || die "Unsupported nftables port action: ${action}"
   [[ "${proto}" == "tcp" || "${proto}" == "udp" ]] || die "Unsupported nftables protocol: ${proto}"
-  nftables_config_has_extra_ports_block || die "nftables extra ports block not found in $(nftables_config_path). Run 06_nftables once before managing extra ports."
+  [[ -f "$(nftables_config_path)" ]] || die "nftables config not found: $(nftables_config_path). Run 06_nftables once before managing extra ports."
 
   local requested_ports=()
   local current_tcp_ports=()
@@ -2284,6 +2297,20 @@ network_tuning_state_root() {
 
 network_tuning_bbr_sysctl_file() {
   printf '/etc/sysctl.d/90-vps-network-bbr.conf\n'
+}
+
+network_tuning_builtin_bbr_sysctl_content() {
+  cat <<'EOF'
+# Managed by VPS network tuning 3.1.
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+EOF
+}
+
+network_tuning_apply_builtin_bbr_profile() {
+  network_tuning_kernel_supports_bbr || die "当前内核不支持 bbr，无法启用 Debian 13 内置 BBRv3。"
+  apply_managed_file "$(network_tuning_bbr_sysctl_file)" "0644" "$(network_tuning_builtin_bbr_sysctl_content)" "true"
+  run_cmd "Applying Debian 13 built-in BBRv3 sysctl profile" sysctl --system
 }
 
 network_tuning_fq_service_name() {

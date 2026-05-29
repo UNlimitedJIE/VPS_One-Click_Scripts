@@ -196,7 +196,7 @@ bash bootstrap.sh plan maintain
 
 说明：
 
-- `1` 在 Debian 13 且当前内核已支持 `bbr` 时，会标注内置 BBRv3 并默认跳过 XanMod
+- `1` 在 Debian 13 且当前内核已支持 `bbr` 时，会自动启用内置 BBRv3：写入受控 sysctl 文件并应用 `net.ipv4.tcp_congestion_control=bbr`、`net.core.default_qdisc=fq`，默认跳过 XanMod
 - 只有手动选择安装 XanMod 时，才会配置 XanMod 官方源并安装内核包；这是可选高风险项
 - `2` 依赖当前内核具备 BBR 能力，带宽档位来自网卡链路速率或手动输入，不调用外部测试脚本
 - `3`、`4` 都是可选项，会直接改变网络行为

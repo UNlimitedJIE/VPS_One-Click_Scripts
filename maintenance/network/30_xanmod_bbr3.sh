@@ -29,7 +29,7 @@ Debian 13 默认内核已内置 BBRv3 能力，通常不需要为了 BBRv3 再�
 
 当前内核：${current_kernel}
 
-1. 保持 Debian 13 内置 BBRv3（推荐，不安装 XanMod）
+1. 启用 Debian 13 内置 BBRv3（推荐，不安装 XanMod）
 2. 仍然安装 / 更新 XanMod 内核
 0. 返回上一级菜单
 99. 退出脚本
@@ -65,10 +65,12 @@ record_debian13_builtin_bbr3() {
   local current_kernel="$1"
   local report=""
 
+  network_tuning_apply_builtin_bbr_profile
+
   report="$(readonly_status_block \
     "Debian 13 内置 BBRv3" \
-    "kernel=${current_kernel}; bbr=yes; bbr3_source=debian13-builtin; xanmod_install=skipped" \
-    "Debian 13 + tcp_available_congestion_control 包含 bbr；未改写 XanMod APT 源，未安装内核，未要求重启" \
+    "kernel=${current_kernel}; bbr=yes; bbr3_source=debian13-builtin; active=$(network_tuning_tcp_congestion_control); default_qdisc=$(network_tuning_default_qdisc); xanmod_install=skipped" \
+    "Debian 13 + tcp_available_congestion_control 包含 bbr；已写入 $(network_tuning_bbr_sysctl_file) 并执行 sysctl --system；未改写 XanMod APT 源，未安装内核，未要求重启" \
     "yes")"
   log info "${report}"
 
@@ -77,6 +79,7 @@ record_debian13_builtin_bbr3() {
   set_state "NETWORK_XANMOD_INSTALL_TARGETS" "none"
   set_state "NETWORK_XANMOD_KERNEL_DONE" "debian13-builtin"
   set_state "NETWORK_XANMOD_REBOOT_REQUIRED" "no"
+  set_state "NETWORK_BBR_TUNED" "yes"
 }
 
 install_xanmod_repo_key() {
